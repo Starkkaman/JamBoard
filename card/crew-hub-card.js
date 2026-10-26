@@ -1,6 +1,8 @@
 /* Crew Hub card: renders machine snapshots (docs/DESIGN.md §2) in the Crew Board v4 look.
    No build step, no deps. Snapshot text is untrusted: DOM APIs + textContent only, never innerHTML with data.
-   API: el.setSnapshots({<machineId>: snapshot}), setConfig(config), set hass(h), getCardSize(). */
+   API: el.setSnapshots({<machineId>: snapshot}), setConfig(config), set hass(h), getCardSize().
+   In Home Assistant the feed is the crew_hub integration's admin-only websocket subscription (crew_hub/subscribe):
+   {"type":"full","machines":{id: {status, snapshot, receivedAt, configured}}} then {"type":"machine","id","data"} per change. */
 (() => {
 const FONT_HREF = "https://fonts.googleapis.com/css2?family=Londrina+Solid:wght@400;900&family=Jost:wght@400;500;600&display=swap";
 
@@ -99,6 +101,13 @@ class CrewHubCard extends HTMLElement {
     this._hass = null;
     this._tickers = [];
     this._timer = null;
+    this._hub = {};          // machineId -> store entry from the integration
+    this._subToken = null;   // identifies the live subscription; callbacks from an older one are ignored
+    this._subPromise = null; // Promise<unsubscribe fn> from connection.subscribeMessage
+    this._subConn = null;
+    this._hubError = false;  // integration missing, not loaded, or user not admin
+    this._errConn = null;    // connection that refused the subscription
+    this._onReady = () => { if (this._hubError) this._subscribe(); };
     this.attachShadow({mode: "open"});
     const style = document.createElement("style");
     style.textContent = CSS;
@@ -110,8 +119,9 @@ class CrewHubCard extends HTMLElement {
     CrewHubCard.loadFonts();
     this._render();
     if (!this._timer) this._timer = setInterval(() => this._tick(), 1000);
+    if (this._hass && !this._subToken) this._subscribe();
   }
-  disconnectedCallback() { clearInterval(this._timer); this._timer = null; }
+  disconnectedCallback() { clearInterval(this._timer); this._timer = null; this._unsubscribe(); }
 
   static loadFonts() {
     if (document.querySelector("link[data-crew-hub-fonts]")) return;
@@ -124,11 +134,69 @@ class CrewHubCard extends HTMLElement {
   /* ---- public API ---- */
   setSnapshots(obj) { this._snaps = obj && typeof obj === "object" ? obj : {}; this._render(); }
   setConfig(config) { this._config = Object.assign({}, config || {}); if (this.isConnected) this._render(); }
-  set hass(h) { this._hass = h; } // stored only; the integration feed comes later
+  set hass(h) {
+    const prev = this._hass;
+    this._hass = h;
+    if (!h || !h.connection) return;
+    if (prev && prev.connection !== h.connection) this._unsubscribe();
+    // hass is set on every state change: subscribe once per connection, and don't retry a refused one here.
+    if (this.isConnected && !this._subToken && !(this._hubError && this._errConn === h.connection)) this._subscribe();
+  }
   get hass() { return this._hass; }
   getCardSize() {
     const n = Math.min(12, this._sessions().length);
     return 4 + n * 3;
+  }
+
+  /* ---- integration feed ---- */
+  _subscribe() {
+    const conn = this._hass && this._hass.connection;
+    if (!conn || typeof conn.subscribeMessage !== "function") return;
+    this._unsubscribe();
+    const token = {};
+    this._subToken = token;
+    this._subConn = conn;
+    // home-assistant-js-websocket re-sends the subscription after a reconnect (resubscribe), and the integration
+    // answers with a fresh "full". "ready" only retries a subscription that failed (e.g. HA was still starting).
+    if (typeof conn.addEventListener === "function") conn.addEventListener("ready", this._onReady);
+    let p;
+    try {
+      p = Promise.resolve(conn.subscribeMessage(msg => { if (this._subToken === token) this._onHub(msg); },
+        {type: "crew_hub/subscribe"}, {resubscribe: true}));
+    } catch (e) { p = Promise.reject(e); }
+    this._subPromise = p;
+    p.then(() => {
+      if (this._subToken === token && this._hubError) { this._hubError = false; this._render(); }
+    }, () => {
+      if (this._subToken !== token) return;
+      this._subToken = null; this._subPromise = null;
+      this._hubError = true; this._errConn = conn;
+      this._render();
+    });
+  }
+  _unsubscribe() {
+    const p = this._subPromise, conn = this._subConn;
+    this._subToken = null; this._subPromise = null; this._subConn = null;
+    if (conn && typeof conn.removeEventListener === "function") conn.removeEventListener("ready", this._onReady);
+    if (p) p.then(unsub => { try { if (typeof unsub === "function") unsub(); } catch (e) { /* connection gone */ } }, () => {});
+  }
+  _onHub(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "full") {
+      this._hub = {};
+      const m = msg.machines;
+      if (m && typeof m === "object") for (const [id, d] of Object.entries(m)) if (d && typeof d === "object") this._hub[id] = d;
+    } else if (msg.type === "machine" && typeof msg.id === "string") {
+      if (msg.data && typeof msg.data === "object") this._hub[msg.id] = msg.data; else delete this._hub[msg.id];
+    } else return;
+    this._hubError = false;
+    const snaps = {};
+    for (const [id, d] of Object.entries(this._hub)) {
+      if (!d.snapshot || typeof d.snapshot !== "object") continue;
+      // The card reads snapshot.status for "computer offline"; the store's MQTT status is the truth.
+      snaps[id] = Object.assign({}, d.snapshot, {status: str(d.status || "unknown"), configured: d.configured !== false});
+    }
+    this.setSnapshots(snaps);
   }
 
   /* ---- helpers ---- */
@@ -142,8 +210,9 @@ class CrewHubCard extends HTMLElement {
       if (!snap || typeof snap !== "object") continue;
       const m = snap.machine || {};
       const offline = str(snap.status || m.status).toLowerCase() === "offline";
+      const unconfigured = snap.configured === false;
       const mname = str(m.name || m.id || mid);
-      for (const s of arr(snap.sessions)) if (s && typeof s === "object") out.push({s, mname, offline});
+      for (const s of arr(snap.sessions)) if (s && typeof s === "object") out.push({s, mname, offline, unconfigured});
     }
     return out;
   }
@@ -152,7 +221,9 @@ class CrewHubCard extends HTMLElement {
   _render() {
     this._tickers = [];
     const root = this._root;
-    root.replaceChildren(this._renderHeader(), this._renderFlow(), this._renderSessions());
+    const parts = [this._renderHeader()];
+    if (this._hubError) parts.push(this._el("div", "muted", "Crew Hub integration not available"));
+    root.replaceChildren(...parts, this._renderFlow(), this._renderSessions());
   }
 
   _renderHeader() {
@@ -237,7 +308,7 @@ class CrewHubCard extends HTMLElement {
     return box;
   }
 
-  _renderSession({s, mname, offline}) {
+  _renderSession({s, mname, offline, unconfigured}) {
     const [cls, label] = SESS[s.status] || SESS.idle;
     const box = this._el("article", "sess " + cls);
     const r = this._el("div", "row");
@@ -257,6 +328,7 @@ class CrewHubCard extends HTMLElement {
     if (typeof s.costUsd === "number" && isFinite(s.costUsd)) m.append(this._el("span", null, "$" + s.costUsd.toFixed(2)));
     if (s.updatedAt) { const sp = this._el("span"); this._tickText(sp, () => "active " + agoMin(s.updatedAt)); m.append(sp); }
     if (offline) m.append(this._el("span", null, "computer offline"));
+    if (unconfigured) m.append(this._el("span", null, "unconfigured"));
     box.append(m);
     const cx = s.ctx;
     if (cx && Number(cx.max) > 0) {

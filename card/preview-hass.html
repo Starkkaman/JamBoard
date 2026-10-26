@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crew Hub card: hass feed preview</title>
+<style>html,body{margin:0;background:#141210}</style>
+<script src="crew-hub-card.js"></script>
+</head>
+<body>
+<crew-hub-card id="card"></crew-hub-card>
+<script>
+// Fake hass for the integration feed: connection.subscribeMessage answers crew_hub/subscribe with the fixture as a
+// "full" message (store shape), then one "machine" update for nas after 2 s.
+// ?refuse=1 makes the subscription fail the way a non-admin user or a missing integration does.
+const FIXTURE_NOW = Date.parse("2026-10-26T14:30:00Z");
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+function shift(v, delta) {
+  if (typeof v === "string" && ISO.test(v)) return new Date(Date.parse(v) + delta).toISOString();
+  if (Array.isArray(v)) return v.map(x => shift(x, delta));
+  if (v && typeof v === "object") { const o = {}; for (const k in v) o[k] = shift(v[k], delta); return o; }
+  return v;
+}
+const params = new URLSearchParams(location.search);
+window.__feed = {subscribes: 0, unsubscribes: 0, updateSent: false};
+
+class FakeConnection {
+  constructor(fixture) { this.fixture = fixture; this.listeners = {}; }
+  addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
+  removeEventListener(t, f) { this.listeners[t] = (this.listeners[t] || []).filter(x => x !== f); }
+  async subscribeMessage(cb, msg, opts) {
+    window.__feed.subscribes++;
+    if (!msg || msg.type !== "crew_hub/subscribe") throw {code: "unknown_command", message: "Unknown command."};
+    if (params.has("refuse")) throw {code: "unauthorized", message: "Unauthorized"};
+    const machines = {};
+    for (const [id, snap] of Object.entries(this.fixture)) {
+      const {status, ...rest} = snap;
+      machines[id] = {status: status || "unknown", snapshot: rest, receivedAt: Date.now(), configured: id !== "mac"};
+    }
+    setTimeout(() => cb({type: "full", machines}), 0);
+    setTimeout(() => {
+      const nas = structuredClone(machines.nas);
+      const now = new Date().toISOString();
+      const ag = nas.snapshot.sessions[0].agents[0];
+      if (ag.current) ag.trail = [...(ag.trail || []), ag.current].slice(-3);
+      ag.current = {text: "Integration update: overlay frame matched", at: now};
+      ag.steps += 1;
+      nas.snapshot.sessions[0].updatedAt = now;
+      nas.snapshot.machine.updatedAt = now;
+      nas.receivedAt = Date.now();
+      cb({type: "machine", id: "nas", data: nas});
+      window.__feed.updateSent = true;
+    }, 2000);
+    return () => { window.__feed.unsubscribes++; };
+  }
+}
+
+(async () => {
+  const card = document.getElementById("card");
+  card.setConfig({type: "custom:crew-hub-card"});
+  const raw = await (await fetch("fixtures/snapshot-sample.json")).json();
+  const connection = new FakeConnection(shift(raw, Date.now() - FIXTURE_NOW));
+  const user = {is_admin: !params.has("refuse")};
+  // HA sets hass on every state change; the card must subscribe only once per connection.
+  card.hass = {connection, user, states: {}};
+  card.hass = {connection, user, states: {}};
+})();
+</script>
+</body>
+</html>

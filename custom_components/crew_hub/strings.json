@@ -1,0 +1,68 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Crew Hub",
+        "description": "Shows live Claude Code sessions reported by crew-hubd over MQTT. Each machine publishes under <prefix>/<machine>/.",
+        "data": {"prefix": "MQTT topic prefix"},
+        "data_description": {"prefix": "Must match \"prefix\" in each machine's ~/.claude/crew-hub/config.json."}
+      }
+    },
+    "error": {
+      "invalid_prefix": "Use 1-64 lower-case letters, digits, '-' or '_' (one topic level, no wildcards)."
+    },
+    "abort": {
+      "single_instance_allowed": "Crew Hub is already set up.",
+      "already_configured": "Crew Hub is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Crew Hub machines",
+        "menu_options": {
+          "add": "Add a machine",
+          "edit": "Edit a machine",
+          "remove": "Remove a machine"
+        }
+      },
+      "add": {
+        "title": "Add a machine",
+        "data": {"id": "Machine id", "name": "Display name", "secret": "Command secret"},
+        "data_description": {
+          "id": "The machineId from the machine's crew-hub config (for example nas).",
+          "secret": "The same command secret as on the machine (at least 16 characters)."
+        }
+      },
+      "edit": {
+        "title": "Edit a machine",
+        "data": {"id": "Machine"}
+      },
+      "edit_machine": {
+        "title": "Edit {machine}",
+        "data": {"name": "Display name", "secret": "New command secret"},
+        "data_description": {"secret": "Leave empty to keep the current secret."}
+      },
+      "remove": {
+        "title": "Remove a machine",
+        "data": {"id": "Machine"}
+      }
+    },
+    "error": {
+      "invalid_machine_id": "Use 1-64 lower-case letters, digits, '-' or '_'.",
+      "machine_exists": "A machine with this id already exists.",
+      "secret_too_short": "The secret must be at least 16 characters."
+    },
+    "abort": {
+      "unknown_machine": "That machine no longer exists."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "working": {"name": "Working"}
+    },
+    "binary_sensor": {
+      "needs_me": {"name": "Needs me"}
+    }
+  }
+}
