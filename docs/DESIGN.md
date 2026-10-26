@@ -157,20 +157,27 @@ If socket injection turns out not to work, the fallback is a "relay" Claude sess
   statuses, timings and token counts. Never tool inputs/outputs, commands, file contents, prompts or agent briefs. The spool is 0600.
 - **Secrets** (MQTT password, command secrets, webhook ids, ha-mcp path) live only in `~/.claude/crew-hub/config.json` and HA's
   config entry. They never go in git or chat.
+- **Broker exposure (no ACL today):** a crew MQTT login can publish to *every* topic, including NerveOS power presses,
+  controlfreak/…, showkiosk/… and homeassistant/# discovery. The HMAC protects only crew commands. This is acceptable on the LAN
+  (the existing logins are equally unrestricted), but **the ACL step must come before any crew credential goes onto a roaming machine.**
 - **Be aware:** sending a message to a session in auto mode is effectively "run work on that machine". It sits behind HA admin
   plus HMAC, and the session's own permission mode still applies.
 
 ## 6. HA changes Mr Manager would make (one batch, needs your OK)
 
 No broker restart, no change to Astrion/RosCard, and existing MQTT clients are untouched.
-1. **MQTT login per machine:** create HA users `crew-nas` (later `crew-mac`, …), non-admin and local-only. Mosquitto's
-   auth_api accepts HA users, so the Mosquitto app needs no restart.
-2. **Install the `crew_hub` integration:** HACS custom repository (or copy into `/config/custom_components`), then restart HA once.
+1. **MQTT login per machine (your hands):** in Settings → People → Users, create `crew-nas` (later `crew-mac`, …), with admin
+   off and "Can only log in from local network" on. ha-mcp can't create users. Mosquitto's auth_api should accept such users
+   with no app restart. **Step 1's first acceptance test is a real publish with that login** before anything depends on it.
+2. **Install the `crew_hub` integration:** HACS custom repository (needs the GitHub repo), or you copy it into
+   `/config/custom_components` with File editor or SSH, since Mr Manager has no /config file access. Mr Manager then restarts HA once.
 3. **Add the integration** via Settings → Devices & services: MQTT prefix `crew`, machine `nas` with its command secret
    (typed into the config flow and stored in HA's .storage).
-4. **New dashboard "Crew"** (sidebar, admin-only, not Astrion) with one `custom:crew-hub-card`. The integration serves and
-   registers the card resource itself (versioned URL, so no cache-busting by hand).
-5. Optional: automation "notify my phone when `binary_sensor.crew_needs_me` turns on".
+4. **New dashboard "Crew"** (sidebar, admin-only, not Astrion) with one `custom:crew-hub-card`. The integration serves the
+   card from a static path and registers it as a Lovelace resource with a version query. A tiny loader loads the real bundle
+   only on the Crew dashboard; `add_extra_js_url` is only a fallback, because it loads on every page. Summary entities are
+   excluded from the recorder.
+5. Optional: automation "`binary_sensor.crew_needs_me` → on for 5 s → `notify.mobile_app_pixel_9a`" (Isaac only).
 
 Deferred (needs a Mosquitto restart): topic ACLs for the crew users. Mosquitto's acl_file is default-deny for **all** users,
 so it would need rules for Control Freak, NerveOS, the kiosks, mac2mqtt and the HA login too. HMAC covers commands meanwhile.
