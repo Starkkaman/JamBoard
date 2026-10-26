@@ -8,7 +8,11 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
   host alias github-jamboard). Build step 1 DONE: reporter (plugins/crew-hub, 47 tests) + card preview (card/).
 - MQTT verified: HA user crew-nas (non-admin, local only) logs in via auth_api; crew-hubd on the NAS publishes
   crew/nas/status + crew/nas/snapshot (retained). Config ~/.claude/crew-hub/config.json (0600, no secrets); MQTT password in secrets.json (0600; user settings deny Read/cat of it; never print it).
-- Plugin NOT yet installed into the NAS's sessions (auto mode wants the user's OK). Bridge tests (docs/evidence/bridge-tests.md) in progress.
+- Plugin crew-hub@jamboard installed (user scope, from this folder) on the NAS 2026-10-26; live edits apply to new hook runs.
+- HA: installed 2026-10-26 by Mr Manager via HACS (repo Starkkaman/JamBoard), backup 7b08d458 before restart; entry "Crew Hub"
+  prefix crew, no machines configured yet (step 5 adds nas + command secret); dashboard /crew-hub (admin, panel, custom:crew-hub-card).
+  HACS updates: push to GitHub, then update.crew_hub_update in HA (needs restart).
+- Bridge tests (docs/evidence/bridge-tests.md) in progress.
 - Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
 ## People
