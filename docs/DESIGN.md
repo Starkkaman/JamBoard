@@ -79,7 +79,9 @@ session blocks from `sessions`, and agent cards from `agents`.
 
 ### Verified vs. assumed
 
-Verified on Claude Code 2.1.295 with a real headless test session (haiku, $0.011). Redacted payloads are in `docs/evidence/`.
+Hook rows were verified on Claude Code 2.1.295 with a real headless test session (haiku, $0.011). Bridge rows (inbox,
+permission/question answers, interrupt, stop, start) were verified on **2.1.310** with throwaway `--bg --remote-control`
+sessions (haiku, ≈ $0.06). Details and exact JSON are in `docs/evidence/bridge-tests.md`; redacted hook payloads are in `docs/evidence/`.
 
 | Fact | Status |
 |---|---|
@@ -91,15 +93,18 @@ Verified on Claude Code 2.1.295 with a real headless test session (haiku, $0.011
 | `TaskCreated / TaskCompleted {task_id, task_subject, task_description}`; PostToolUse TaskUpdate has `statusChange {from,to}` | ✅ verified (in_progress transition only via TaskUpdate) |
 | `Stop {last_assistant_message, background_tasks}`, `SessionEnd {reason}`, `SessionStart {source}` | ✅ verified |
 | Remote Control sessions run as `claude --print --session-id cse_X`; `cse_X` ↔ CCR `session_X` (same suffix) | ✅ verified (ps + list_sessions) |
-| `~/.claude/sessions/<pid>.json` holds `sessionId`, `name`, `status busy/idle`, `bridgeSessionId`, `messagingSocketPath`; `claude agents --json` lists live sessions | ✅ verified |
-| Each session has an inbox socket `/tmp/cc-socks/<pid>.sock` with a per-session peer token (`<pid>.*.key`, 0600, same uid); the CLI documents a `{"type":"auth"}` + `{"type":"user",…}` line protocol | ✅ seen in the CLI; ❌ **injection not tested** (blocked by auto mode, needs your OK) |
-| Hooks fire inside Remote Control sessions the same as in the CLI | ⚠ assumed (same binary); first test in step 1 |
-| Model + context from the transcript tail (assistant `usage`); cost estimated from a price table | ⚠ assumed. Hooks carry no cost or context; CCR's `cost_usd` isn't reachable without a model |
-| `PermissionRequest` hook can hold the prompt and return allow/deny decided in HA | ⚠ to test |
-| `PreToolUse` on `AskUserQuestion` can be answered from HA (deny with reason = your answer) | ⚠ to test |
-| `Notification` payload for "waiting for input" | ⚠ to test |
-| Interrupt a running turn locally (socket message type or signal) | ❓ unknown |
-| Start a new session visible in claude.ai: `claude --bg --remote-control <name> --model … ` in a folder | ⚠ to test |
+| `~/.claude/sessions/<pid>.json` holds `sessionId`, `name`, `status`, `bridgeSessionId`, `messagingSocketPath`, `procStart`; `claude agents --json` lists live sessions | ✅ verified. Status values: `busy`, `idle`, `shell` (a background shell task is running) and `waiting`. `waiting` comes with `waitingFor: "permission prompt"` or `"input needed"`. Stale files for dead or reused pids exist, so check `procStart` against `/proc/<pid>/stat` field 22. |
+| Inbox socket injection (`/tmp/cc-socks/<pid>.sock`; `{"type":"auth","token"}` then `{"type":"user","priority","from","message"}`) | ✅ verified, also after a respawn. The token is in `~/.claude/sessions/<pid>.<sha256(messagingSocketPath)>.key`. The model sees the text wrapped as a message from "another Claude session", not as the user's own words, and it can't approve a pending prompt. |
+| Priority `now` vs `next` while a session is busy | ✅ verified. `next` is queued and delivered at the next tool boundary inside the same turn, or as the next turn. `now` cuts model streaming at once, but a running tool finishes first. A cut turn sends no `Stop` hook. |
+| Hooks fire inside Remote Control sessions the same as in the CLI | ✅ for `--bg --remote-control` sessions (2.1.310). ⚠ still assumed for `claude remote-control` children (`--print --sdk-url`). |
+| Model and context from the transcript tail | ✅ verified. Context = `input + cache_creation_input + cache_read_input` of the last main-chain assistant `usage`; dedupe entries by `message.id`. **Max context** only appears in the statusLine payload (`context_window.context_window_size`) and in CCR metadata. |
+| Cost | ✅ verified, with limits. Live cost comes only from the statusLine payload (`cost.total_cost_usd`; statusLine runs in `--bg` sessions). Transcript `cost-state` entries are written only at exit or respawn and leave out aborted turns. Otherwise it's an estimate from usage. |
+| `PermissionRequest` hook can hold the prompt and return allow/deny decided in HA | ✅ verified (8 s hold). It races the TUI and claude.ai prompt, and the first answer wins. Set the hook `timeout` explicitly. The payload has no `tool_use_id`. |
+| `AskUserQuestion` answered from HA | ✅ verified, and it works in `--bg` sessions. The clean way is PermissionRequest (or PreToolUse) `allow` with `updatedInput.answers {questionText: label}`. Deny-with-reason also works, but the model sees it as an error. |
+| `Notification` payloads | ✅ `permission_prompt` ("Claude needs your permission") fires 6 s after a permission or question dialog opens. ❌ `idle_prompt` never fired in bg sessions, so use `Stop` plus the sessions-json status instead. |
+| Interrupt a running turn locally | ✅ for `--bg` sessions: `claude attach <id>` in a pty, then one ESC, kills the running tool. Soft version: an inbox `now` message. SIGINT/SIGTERM **exit** the session; SIGTERM also gets respawned. ❓ Remote Control children: no local interrupt; it needs claude.ai or CCR `interrupt_session`. |
+| Start a new session visible in claude.ai: `claude --bg --remote-control <ccr title> -n <local name> --permission-mode <m> --model …` | ✅ verified (from `/home/node/project`, the only trusted folder) |
+| Stop a `--bg` session | ✅ `claude stop <id>` exits in under 1 s, even mid-turn, with SessionEnd `reason:"other"` and no respawn. `claude rm <id>` needs the on-demand daemon running. |
 | TodoWrite (older tool) | not used by 2.1.295 by default (TaskCreate/TaskUpdate replaced it); handled anyway |
 
 ## 3. Plugin shape and new-machine setup
@@ -135,14 +140,18 @@ Allowlisted actions only. There is no shell, no free-form command, and no path o
 
 | Action | Mechanism (best → fallback) | Confirm in card |
 |---|---|---|
-| `send_message(session, text)` | inject via the session's inbox socket (zero tokens) | no |
-| `answer(session, requestId, choice/text)` | PermissionRequest / AskUserQuestion hook waits briefly for an HA answer; else send_message | no |
-| `interrupt(session)` | socket/IPC if one exists; else SIGINT to the session pid (to test) | **yes** |
-| `stop(session)` | `claude stop <id>` for --bg sessions; Remote Control: to test | **yes** |
-| `start(machine, folderPreset, model, prompt)` | `claude --bg --remote-control` in an allowlisted folder, model from an allowlist | **yes** |
+| `send_message(session, text, urgent?)` | Inbox socket (zero tokens, ✅ verified). Look up by sessionId and send priority `next`. With `urgent`, send `now`: it cuts model output at once, but a running tool finishes first. The model is told it's a message from another session, so a pending prompt can't be approved this way. | no |
+| `answer(session, requestId, choice/text)` | A crew `PermissionRequest` hook (matcher `*`, with an explicit `timeout` in seconds of at least the hold time) publishes the request and waits on a local answer file. It returns `decision.behavior` allow/deny (+ `message`). For AskUserQuestion it returns allow with `updatedInput.answers {questionText: label}`. It races the TUI and claude.ai prompt: whoever answers first wins, and the other side is cancelled. ✅ verified. `requestId` = our own id. The payload has no `tool_use_id`, so pair it with the preceding PreToolUse. | no |
+| `interrupt(session)` | `--bg`: run `claude attach <id>` in a pty, send **one** ESC, close the client (✅ verified, kills a running tool). Fallback: a `now` message. Never SIGINT/SIGTERM: they end the session. Remote Control children: no local interrupt, so use the relay (CCR `interrupt_session`) or a `now` message (untested there). | **yes** |
+| `stop(session)` | `--bg`: `claude stop <id>` (✅ verified; `claude --bg --resume <sessionId>` with no flags resumes it). Remote Control children: not offered (signals would kill the bridged process); archive from claude.ai instead. | **yes** |
+| `start(machine, folderPreset, model, prompt)` | `claude --bg --remote-control "<title>" -n "<name>" --permission-mode <mode> --model <m> "<prompt>"` in an allowlisted, trusted folder (✅ verified). It returns the bg id; the CCR id appears in `sessions/<pid>.json` `bridgeSessionId` shortly after start (it was there by the first idle, ~4 s). | **yes** |
+| `rename(session, name)` (optional) | Inbox control frame `{"type":"control","action":"rename","name"}` (✅ verified, local name only) | no |
 
-If socket injection turns out not to work, the fallback is a "relay" Claude session using the Claude Code Remote tools
-(send_message, interrupt_session, create_session). It works, but every command costs one model turn, so I'd keep it as a last resort.
+Status for the card comes from `sessions/<pid>.json` with no hooks needed: `busy` / `idle` / `waiting` (+ `waitingFor`) / `shell`.
+A turn cut by an interrupt or a `now` message sends no `Stop`, so a new `UserPromptSubmit` or the status going `idle` ends it.
+
+The "relay" Claude session (Claude Code Remote tools send_message, interrupt_session, create_session) is now needed only to
+interrupt Remote Control children. Every command through it costs one model turn.
 
 ## 5. Security model
 
@@ -198,10 +207,11 @@ so it would need rules for Control Freak, NerveOS, the kiosks, mac2mqtt and the 
 6. Plugin packaging, marketplace repo, `/crew-hub-setup`; then the Mac.
 7. Roaming machines, if any (Tailscale preferred).
 
-## Decisions I need from you
+## Decisions (2026-10-26)
 
-1. **Socket injection test:** may I inject a test message into a session's inbox socket (first my own session, then a throwaway
-   `--bg` session)? Auto mode blocked it. It's the zero-token way to deliver messages; the alternative costs a model turn per command.
-2. **Hosting:** GitHub `Starkkaman/crew-hub` (HACS needs GitHub; public is simplest, private means a manual copy into HA) or Gitea?
-3. **Approve the HA batch in §6** (can wait until step 4).
-4. **Do any hub machines run off the LAN?** If none do, plain LAN MQTT is enough. If some do, I recommend the Tailscale app.
+1. Socket injection: approved by Isaac and verified (docs/evidence/bridge-tests.md).
+2. Hosting: GitHub Starkkaman/JamBoard (HACS custom repository).
+3. The MacBook roams: Tailscale app + broker ACLs (batch B) come before it gets a login.
+4. HA batch A: approved and applied 2026-10-26 (HACS install, restart, integration, "Crew" dashboard). Machines + command
+   secrets come with step 5.
+5. Not rotating the crew-nas password for now (Isaac). It lives only in ~/.claude/crew-hub/secrets.json.
