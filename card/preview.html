@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crew Hub card preview</title>
+<style>html,body{margin:0;background:#141210}</style>
+<script src="crew-hub-card.js"></script>
+</head>
+<body>
+<crew-hub-card id="card"></crew-hub-card>
+<script>
+// Preview harness: loads the fixture, shifts its timestamps so the fixture's fixed "now" becomes the real now,
+// then advances a running agent's step every 3 s to show live updates.
+const FIXTURE_NOW = Date.parse("2026-10-26T14:30:00Z");
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+function shift(v, delta) {
+  if (typeof v === "string" && ISO.test(v)) return new Date(Date.parse(v) + delta).toISOString();
+  if (Array.isArray(v)) return v.map(x => shift(x, delta));
+  if (v && typeof v === "object") { const o = {}; for (const k in v) o[k] = shift(v[k], delta); return o; }
+  return v;
+}
+const NEXT = ["Map remote keys to IG button navigation", "Render button overlay at 1920x1080", "Run instrumented test on the TV",
+  "Compare overlay against reference frame", "Read HDMV navigation commands", "Commit menu renderer patch"];
+(async () => {
+  const card = document.getElementById("card");
+  card.setConfig({type: "custom:crew-hub-card"});
+  const raw = await (await fetch("fixtures/snapshot-sample.json")).json();
+  let data = shift(raw, Date.now() - FIXTURE_NOW);
+  card.setSnapshots(data);
+  let n = 0;
+  setInterval(() => {
+    const now = new Date().toISOString();
+    const sess = data.nas.sessions[0];
+    const ag = sess.agents[n % 2];
+    if (ag.current) ag.trail = [...ag.trail, ag.current].slice(-3);
+    ag.current = {text: NEXT[n % NEXT.length], at: now};
+    ag.steps += 1;
+    sess.updatedAt = now; data.nas.machine.updatedAt = now;
+    n++;
+    data = structuredClone(data);
+    card.setSnapshots(data);
+  }, 3000);
+})();
+</script>
+</body>
+</html>

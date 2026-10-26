@@ -179,7 +179,12 @@ No broker restart, no change to Astrion/RosCard, and existing MQTT clients are u
    excluded from the recorder.
 5. Optional: automation "`binary_sensor.crew_needs_me` → on for 5 s → `notify.mobile_app_pixel_9a`" (Isaac only).
 
-Deferred (needs a Mosquitto restart): topic ACLs for the crew users. Mosquitto's acl_file is default-deny for **all** users,
+**Batch B, the roaming Mac (Isaac: "my MacBook jumps on and off the home network all the time"). Required before the Mac gets a login:**
+6. Tailscale app in HA (Mac joins the tailnet and reaches Mosquitto privately).
+7. Mosquitto ACLs: turn on customize, add an acl file with full-access rules for every existing client and `crew-*` users
+   limited to `crew/<own machine>/#`, then restart Mosquitto (all MQTT devices drop for a few seconds; do it at a quiet time).
+
+Original note on the ACLs (needs a Mosquitto restart): Mosquitto's acl_file is default-deny for **all** users,
 so it would need rules for Control Freak, NerveOS, the kiosks, mac2mqtt and the HA login too. HMAC covers commands meanwhile.
 
 ## 7. Build steps (each verified before the next)

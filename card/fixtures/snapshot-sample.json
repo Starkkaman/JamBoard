@@ -1,0 +1,130 @@
+{
+  "nas": {
+    "status": "online",
+    "machine": {"id": "nas", "name": "nas", "version": "0.1.0", "updatedAt": "2026-10-26T14:29:58Z"},
+    "sessions": [
+      {
+        "id": "8c1f2a4e-3b7d-4e19-9a61-0f2d5c7b9e10",
+        "ccr": "session_01BPprSFdhBQg3taJLueQEUy",
+        "name": "Jamfin",
+        "project": "jamfin",
+        "status": "working",
+        "summary": "Running the disc-engine plan: menu overlay and HDR10 passthrough agents are working.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "ctx": {"used": 142000, "max": 200000},
+        "costUsd": 3.84,
+        "startedAt": "2026-10-26T13:05:12Z",
+        "updatedAt": "2026-10-26T14:29:58Z",
+        "tasks": [],
+        "plan": {
+          "title": "Disc engine: Blu-ray menus on the Hisense",
+          "phase": "build",
+          "done": 2,
+          "total": 5,
+          "finished": false,
+          "updatedAt": "2026-10-26T14:27:40Z",
+          "tasks": [
+            {"id": "t1", "title": "Probe libbluray build for arm64", "tier": "heavy", "status": "done", "order": 1, "agentId": "a5c1e0d2b7f94e31", "summary": "libbluray 1.3.4 builds with the NDK r27; BD-J disabled."},
+            {"id": "t2", "title": "Index sample ISOs in ~/media/Bluray", "tier": "light", "status": "done", "order": 2, "agentId": "a19b8e7c2d3f4a55", "summary": "14 ISOs indexed; 3 use BD-J menus."},
+            {"id": "t3", "title": "Menu overlay renderer (IG streams)", "tier": "careful", "status": "running", "order": 3, "agentId": "a7f3c2e1d9b84a60"},
+            {"id": "t4", "title": "HDR10 passthrough on ExoPlayer", "tier": "medium", "status": "running", "order": 4, "agentId": "a2e8d4c6b1f07a92"},
+            {"id": "t5", "title": "Remote key mapping for menus", "tier": "light", "status": "queued", "order": 5}
+          ]
+        },
+        "agents": [
+          {
+            "id": "a7f3c2e1d9b84a60", "type": "savvy-flow:savvy-careful", "title": "Menu overlay renderer (IG streams)",
+            "model": "claude-opus-5-5", "status": "running", "startedAt": "2026-10-26T14:12:05Z", "endedAt": null, "steps": 23,
+            "current": {"text": "Decode IG segment palette from 00001.m2ts", "at": "2026-10-26T14:29:41Z"},
+            "trail": [
+              {"text": "Read BDMV/PLAYLIST/00000.mpls", "at": "2026-10-26T14:24:10Z"},
+              {"text": "Build disc-engine module with Gradle", "at": "2026-10-26T14:26:52Z"},
+              {"text": "Run IG parser unit tests", "at": "2026-10-26T14:28:30Z"}
+            ]
+          },
+          {
+            "id": "a2e8d4c6b1f07a92", "type": "savvy-flow:savvy-medium", "title": "HDR10 passthrough on ExoPlayer",
+            "model": "claude-opus-5-5", "status": "running", "startedAt": "2026-10-26T14:18:33Z", "endedAt": null, "steps": 9,
+            "current": {"text": "Check display HDR capabilities over adb", "at": "2026-10-26T14:29:12Z"},
+            "trail": [
+              {"text": "Sort HDR10 titles by play count and read first row", "at": "2026-10-26T14:21:02Z"},
+              {"text": "Read MediaCodec tunneling notes", "at": "2026-10-26T14:24:47Z"},
+              {"text": "Install debug APK on the TV", "at": "2026-10-26T14:27:15Z"}
+            ]
+          },
+          {
+            "id": "a19b8e7c2d3f4a55", "type": "savvy-flow:savvy-light", "title": "Index sample ISOs in ~/media/Bluray",
+            "model": "claude-opus-5-5", "status": "done", "startedAt": "2026-10-26T13:41:20Z", "endedAt": "2026-10-26T13:42:01Z", "steps": 4,
+            "summary": "14 ISOs indexed; 3 use BD-J menus, 11 use HDMV IG menus.",
+            "current": {"text": "Write index to fixtures/discs.json", "at": "2026-10-26T13:41:58Z"},
+            "trail": [
+              {"text": "List ISO files under ~/media/Bluray", "at": "2026-10-26T13:41:25Z"},
+              {"text": "Read index.bdmv from each ISO", "at": "2026-10-26T13:41:44Z"},
+              {"text": "Write index to fixtures/discs.json", "at": "2026-10-26T13:41:58Z"}
+            ]
+          }
+        ]
+      },
+      {
+        "id": "4d2b9c71-8a0e-4f3b-b5d6-91c7e2a0f4b8",
+        "ccr": "session_012zoHCHE3a15umwYuRC4XwL",
+        "name": "Home Assistant Mr Manager",
+        "project": "home-assistant",
+        "status": "waiting",
+        "waiting": {"kind": "permission", "tool": "Bash", "text": "Reconnect adb to the Hisense TV", "requestId": "req_7f31a2", "options": ["allow", "deny"]},
+        "summary": "Checking why the TV's picture-mode entity went unavailable after the reboot.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {"used": 181500, "max": 200000},
+        "costUsd": 1.27,
+        "startedAt": "2026-10-26T12:40:00Z",
+        "updatedAt": "2026-10-26T14:26:30Z",
+        "tasks": [],
+        "agents": []
+      },
+      {
+        "id": "b8e41f03-2c6a-47d9-8e15-3a90c6d2f7e1",
+        "ccr": null,
+        "name": "Crew Hub",
+        "project": "crew-hub",
+        "status": "idle",
+        "summary": "Card scaffold ready; next is the HA integration once the batch is approved.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "ctx": {"used": 64000, "max": 200000},
+        "costUsd": null,
+        "startedAt": "2026-10-26T11:50:00Z",
+        "updatedAt": "2026-10-26T14:18:00Z",
+        "tasks": [
+          {"id": "1", "subject": "Write the snapshot fixture", "status": "completed"},
+          {"id": "2", "subject": "Build the Lovelace card", "status": "in_progress"},
+          {"id": "3", "subject": "Draft the crew_hub integration", "status": "pending"}
+        ],
+        "agents": []
+      }
+    ]
+  },
+  "mac": {
+    "status": "offline",
+    "machine": {"id": "mac", "name": "mac", "version": "0.1.0", "updatedAt": "2026-10-26T13:52:10Z"},
+    "sessions": [
+      {
+        "id": "f0a3c5e7-9b1d-4c2e-a6f8-0d1e2f3a4b5c",
+        "ccr": "session_01Xh7TqArtemisPadKiosk",
+        "name": "Artemis - iPad kiosk",
+        "project": "pad-kiosk",
+        "status": "ended",
+        "summary": "PadKiosk v0.1.1 built and installed; black screen on wake fixed.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {"used": 98000, "max": 200000},
+        "costUsd": 2.06,
+        "startedAt": "2026-10-26T10:15:00Z",
+        "updatedAt": "2026-10-26T13:51:40Z",
+        "tasks": [],
+        "agents": []
+      }
+    ]
+  }
+}
