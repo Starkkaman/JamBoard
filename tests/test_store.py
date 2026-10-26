@@ -56,7 +56,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(data["receivedAt"], 2000)
         self.assertEqual(self.store.working_count(), 1)
         self.assertTrue(self.store.any_waiting())
-        self.assertEqual(self.store.waiting_names(), ["Home Assistant Mr Manager"])
+        self.assertEqual(self.store.waiting_names(), ["Home Assistant Mr Manager", "Music Assistant tidy-up"])
 
     def test_offline_machine_sessions_do_not_count(self):
         self.store.handle_message("crew/nas/snapshot", json.dumps(nas_snapshot()))

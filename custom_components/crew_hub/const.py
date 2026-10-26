@@ -2,7 +2,7 @@
 
 DOMAIN = "crew_hub"
 NAME = "Crew Hub"
-VERSION = "0.1.1"  # keep equal to manifest.json "version"
+VERSION = "0.2.0"  # keep equal to manifest.json "version"
 
 CONF_PREFIX = "prefix"
 CONF_MACHINES = "machines"
@@ -21,3 +21,7 @@ CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
 
 WS_SUBSCRIBE = f"{DOMAIN}/subscribe"
 WS_GET = f"{DOMAIN}/get"
+WS_COMMAND = f"{DOMAIN}/command"
+
+# hass.data key: pending command id -> (machine, asyncio.Future) waiting for <prefix>/<machine>/ack
+DATA_PENDING = f"{DOMAIN}_pending"

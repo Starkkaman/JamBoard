@@ -2,7 +2,8 @@
 
 Loop (every POLL seconds): read new spool lines and fold them; every ENRICH seconds read ~/.claude/sessions/*.json,
 transcript tails and plan files; every PLAN_POLL seconds stat the plans dir (plans from sessions without hooks); publish the snapshot when it changed (at most once a second) and at least every 60 s.
-Commands on crew/<m>/cmd are only logged in this step. Never logs secrets, prompts or command arguments.
+Signed commands on crew/<m>/cmd are verified and executed by commands.CommandHandler (docs/COMMANDS.md); acks go to
+crew/<m>/ack. Never logs secrets, prompts or command arguments.
 """
 
 import fcntl
@@ -13,6 +14,7 @@ import sys
 import time
 
 from . import VERSION, config, paths
+from .commands import CommandHandler, Executor
 from .mqtt import Client
 from .spool import Spool
 from .state import Model, now_ms
@@ -24,6 +26,8 @@ MIN_PUBLISH = 1.0
 HEARTBEAT = 60.0
 SAVE_EVERY = 2.0
 LOG_MAX = 1024 * 1024
+ANSWER_SWEEP = 60.0
+ANSWER_MAX_AGE = 10 * 60.0
 
 
 class Log(object):
@@ -60,9 +64,10 @@ def write_atomic(path, data):
 class MqttLink(object):
     """Owns the broker connection: connect with LWT, online status, cmd subscription, backoff up to 60 s."""
 
-    def __init__(self, cfg, log):
+    def __init__(self, cfg, log, commands=None):
         self.cfg = cfg
         self.log = log
+        self.commands = commands
         self.client = None
         self.next_try = 0.0
         self.backoff = 1.0
@@ -70,6 +75,7 @@ class MqttLink(object):
         self.status_topic = cfg.topic("status")
         self.snapshot_topic = cfg.topic("snapshot")
         self.cmd_topic = cfg.topic("cmd")
+        self.ack_topic = cfg.topic("ack")
 
     @property
     def connected(self):
@@ -128,17 +134,27 @@ class MqttLink(object):
     def on_message(self, topic, payload, retain):
         if topic != self.cmd_topic:
             return
-        if retain:
-            self.log("cmd: ignored a retained message (%d bytes)" % len(payload))
+        if self.commands is None:
+            self.log("cmd: dropped a message (%d bytes); commands not set up" % len(payload))
             return
         try:
-            d = json.loads(payload.decode("utf-8"))
-            cid = str(d.get("id"))[:64] if isinstance(d, dict) else "?"
-            action = str(d.get("action"))[:40] if isinstance(d, dict) else "?"
-        except Exception:
-            cid, action = "?", "unparseable"
-        # Step 1 only logs commands; execution (HMAC, allowlist) comes in step 5.
-        self.log("cmd: received id=%s action=%s (%d bytes); not executed in this version" % (cid, action, len(payload)))
+            self.commands.receive(payload, retain)
+        except Exception as e:
+            self.log("cmd: handler error %s" % type(e).__name__)
+
+    def publish_acks(self):
+        """Acks queued by the command handler (from this thread or its worker), QoS 1, never retained."""
+        if self.commands is None:
+            return
+        for body in self.commands.acks():
+            if not self.connected:
+                self.log("cmd ack id=%s dropped: not connected" % body.get("id"))
+                continue
+            try:
+                self.client.publish(self.ack_topic, json.dumps(body, separators=(",", ":")).encode("utf-8"), qos=1,
+                                    retain=False)
+            except Exception as e:
+                self._fail("ack publish", e)
 
     def offline(self):
         if not self.connected:
@@ -171,7 +187,16 @@ class Daemon(object):
         except Exception as e:
             self.log("state.json unreadable (%s); starting fresh" % type(e).__name__)
         self.spool = Spool(paths.spool_path(), pos)
-        self.mqtt = MqttLink(self.cfg, log) if self.cfg.mqtt else None
+        self.commands = None
+        if self.cfg.mqtt:
+            cmds = self.cfg.commands
+            self.commands = CommandHandler(cmds, log, executor=Executor(cmds, waiting=self.model.waiting_state, log=log))
+            if cmds.enabled and not cmds.secret:
+                log("commands enabled in config.json but secrets.json has no commandSecret: commands stay off")
+            elif cmds.active:
+                log("commands on: %d folder preset(s), hold %ds" % (len(cmds.folders), int(cmds.hold_seconds)))
+        self.mqtt = MqttLink(self.cfg, log, self.commands) if self.cfg.mqtt else None
+        self.last_sweep = 0.0
         self.last_core = None
         self.last_publish = 0.0
         self.last_enrich = 0.0
@@ -181,7 +206,32 @@ class Daemon(object):
         self.started = now_ms()
 
     def machine(self):
-        return {"id": self.cfg.machine_id, "name": self.cfg.machine_name, "version": VERSION, "updatedAt": now_ms()}
+        m = {"id": self.cfg.machine_id, "name": self.cfg.machine_name, "version": VERSION, "updatedAt": now_ms()}
+        pub = self.cfg.commands.public() if self.cfg.mqtt else None
+        if pub:
+            m["commands"] = pub
+        return m
+
+    def commands_active(self):
+        return bool(self.cfg.mqtt and self.cfg.commands.active)
+
+    def sweep_answers(self, now):
+        """Delete answer files nobody picked up (the hook was gone or the prompt was answered elsewhere)."""
+        if now - self.last_sweep < ANSWER_SWEEP:
+            return
+        self.last_sweep = now
+        d = paths.answers_dir()
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                if now - os.lstat(p).st_mtime > ANSWER_MAX_AGE:
+                    os.unlink(p)
+            except OSError:
+                pass
 
     def ingest(self):
         lines = self.spool.poll()
@@ -224,7 +274,7 @@ class Daemon(object):
         heartbeat = now - self.last_publish >= HEARTBEAT
         if not (force or heartbeat or (self.model.changed and now - self.last_publish >= MIN_PUBLISH)):
             return
-        snap = self.model.snapshot(self.machine())
+        snap = self.model.snapshot(self.machine(), self.commands_active())
         self.model.changed = False
         core = json.dumps(snap["sessions"], sort_keys=True, separators=(",", ":"))
         if not (force or heartbeat) and core == self.last_core:
@@ -262,6 +312,7 @@ class Daemon(object):
                 self.maybe_poll_plans(now)
                 self.maybe_publish(now, force=first)
                 self.save_state(now)
+                self.sweep_answers(now)
             except Exception as e:
                 self.log("loop error: %s: %s" % (type(e).__name__, e))
             first = False
@@ -271,6 +322,7 @@ class Daemon(object):
             if self.mqtt:
                 try:
                     waited = self.mqtt.step(POLL)
+                    self.mqtt.publish_acks()
                 except Exception as e:
                     self.log("mqtt error: %s" % e)
             if not waited:
@@ -281,7 +333,13 @@ class Daemon(object):
             self.maybe_publish(time.time(), force=True)
         except Exception:
             pass
+        if self.commands:
+            self.commands.close()
         if self.mqtt:
+            try:
+                self.mqtt.publish_acks()
+            except Exception:
+                pass
             self.mqtt.offline()
         self.save_state(time.time(), force=True)
         self.log("crew-hubd stopped")

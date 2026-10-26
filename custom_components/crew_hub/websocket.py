@@ -2,6 +2,7 @@
 
 crew_hub/subscribe: result, then {"type": "full", "machines": {...}}, then {"type": "machine", "id", "data"} per change.
 crew_hub/get: the full machine map as the result.
+crew_hub/command: {machine, action, args} -> signed MQTT command (commands.py); result {ok, error?, result?}.
 """
 
 from __future__ import annotations
@@ -13,7 +14,8 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DATA_STORE, WS_GET, WS_SUBSCRIBE
+from .commands import async_send_command
+from .const import DATA_STORE, WS_COMMAND, WS_GET, WS_SUBSCRIBE
 from .store import CrewStore
 
 
@@ -21,6 +23,7 @@ from .store import CrewStore
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_get)
+    websocket_api.async_register_command(hass, ws_command)
 
 
 def _store(hass: HomeAssistant) -> CrewStore | None:
@@ -55,3 +58,20 @@ def ws_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg:
         connection.send_error(msg["id"], "not_loaded", "Crew Hub is not set up")
         return
     connection.send_result(msg["id"], {"machines": store.as_dict()})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): WS_COMMAND,
+    vol.Required("machine"): str,
+    vol.Required("action"): str,
+    vol.Optional("args", default=dict): dict,
+})
+@websocket_api.async_response
+async def ws_command(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Every outcome (refused, no ack, daemon error, ok) is a result {ok, error?, result?} so the card shows it inline."""
+    if _store(hass) is None:
+        connection.send_error(msg["id"], "not_loaded", "Crew Hub is not set up")
+        return
+    result = await async_send_command(hass, msg["machine"], msg["action"], msg["args"])
+    connection.send_result(msg["id"], result)

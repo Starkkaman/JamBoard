@@ -7,10 +7,18 @@ config.json never holds a password (other sessions read it):
   "prefix": "crew",
   "mqtt": {"host": "...", "port": 1883, "username": "..."},
   "contextMax": {"<model substring>": tokens},
-  "summaries": true              default true; false = the hook never records Stop/SubagentStop messages
-}                                  (read by crew-hook itself, see hook.summaries_enabled)
+  "summaries": true,             default true; false = the hook never records Stop/SubagentStop messages
+                                   (read by crew-hook itself, see hook.summaries_enabled)
+  "commands": {                  signed commands from Home Assistant (docs/COMMANDS.md); off unless enabled AND
+    "enabled": false,            secrets.json has commandSecret
+    "folders": {"<key>": {"path": "/abs/path", "label": "Shown in HA"}},   start presets (key: [A-Za-z0-9_-]{1,40})
+    "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+    "permissionModes": ["default", "acceptEdits", "auto", "plan"],
+    "holdSeconds": 55            how long crew-hook waits for an answer to a permission prompt/question (0..55;
+  }                                0 = publish only). Also read by crew-hook itself (hook.commands_hold).
+}
 
-secrets.json: {"mqttPassword": "...", "commandSecret": "..." (optional, for signed commands later)}
+secrets.json: {"mqttPassword": "...", "commandSecret": "..." (optional: signed commands)}
 Password order: secrets.json mqttPassword, then the legacy config.json mqtt.password. load(migrate=True), called by
 crew-hubd under its pidfile lock, moves a legacy password into secrets.json and rewrites config.json without it.
 Nothing here ever logs a secret value.
@@ -23,6 +31,76 @@ import socket
 import stat
 
 from . import paths
+
+
+DEFAULT_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+DEFAULT_MODES = ["default", "acceptEdits", "auto", "plan"]
+HOLD_DEFAULT = 55
+HOLD_MAX = 55  # hooks.json gives PermissionRequest a 65 s timeout: the hold must end well before it
+FOLDER_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,79}$")
+MODE_RE = re.compile(r"^[A-Za-z]{1,30}$")
+
+
+def hold_seconds(value):
+    """holdSeconds clamped to 0..HOLD_MAX; anything odd means the default."""
+    if isinstance(value, bool):
+        return HOLD_DEFAULT
+    try:
+        v = float(value)
+    except Exception:
+        return HOLD_DEFAULT
+    if v != v:  # NaN
+        return HOLD_DEFAULT
+    return max(0.0, min(float(HOLD_MAX), v))
+
+
+def _str_list(value, default, pattern):
+    if not isinstance(value, list):
+        return list(default)
+    out = []
+    for v in value:
+        if isinstance(v, str) and pattern.match(v) and v not in out:
+            out.append(v)
+    return out
+
+
+class Commands(object):
+    """The "commands" block. `active` needs enabled + a command secret; folders/models/modes are the allowlist."""
+
+    def __init__(self, data, secret):
+        data = data if isinstance(data, dict) else {}
+        self.enabled = data.get("enabled") is True
+        self.secret = secret
+        self.folders = {}
+        folders = data.get("folders")
+        if isinstance(folders, dict):
+            for key, v in folders.items():
+                if not (isinstance(key, str) and FOLDER_KEY_RE.match(key) and isinstance(v, dict)):
+                    continue
+                path = v.get("path")
+                if not (isinstance(path, str) and os.path.isabs(path)):
+                    continue
+                label = v.get("label") if isinstance(v.get("label"), str) and v.get("label").strip() else key
+                self.folders[key] = {"path": os.path.normpath(path), "label": label.strip()[:60]}
+        self.models = _str_list(data.get("models"), DEFAULT_MODELS, MODEL_RE)
+        self.permission_modes = _str_list(data.get("permissionModes"), DEFAULT_MODES, MODE_RE)
+        self.hold_seconds = hold_seconds(data.get("holdSeconds", HOLD_DEFAULT))
+
+    @property
+    def active(self):
+        return bool(self.enabled and self.secret)
+
+    def public(self):
+        """machine.commands for the snapshot: keys and labels only, never paths. None when inactive."""
+        if not self.active:
+            return None
+        return {
+            "enabled": True,
+            "folders": [{"key": k, "label": v["label"]} for k, v in sorted(self.folders.items())],
+            "models": list(self.models),
+            "permissionModes": list(self.permission_modes),
+        }
 
 
 def _topic_safe(value):
@@ -56,6 +134,7 @@ class Config(object):
             }
         cs = secrets.get("commandSecret")
         self.command_secret = cs if isinstance(cs, str) and cs else None
+        self.commands = Commands(data.get("commands"), self.command_secret)
         cm = data.get("contextMax")
         self.context_max = {}
         if isinstance(cm, dict):

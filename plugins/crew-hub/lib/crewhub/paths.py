@@ -47,11 +47,41 @@ def sessions_dir():
     return os.path.join(claude_dir(), "sessions")
 
 
+def answers_dir():
+    return os.path.join(hub_dir(), "answers")
+
+
+def answer_path(request_id):
+    """answers/<requestId>.json; the caller has already checked request_id is a uuid (no path characters)."""
+    return os.path.join(answers_dir(), "%s.json" % request_id)
+
+
+def claude_json_path():
+    """~/.claude.json (read-only for us: project trust flags)."""
+    return os.path.join(os.path.expanduser("~"), ".claude.json")
+
+
 def ensure_hub_dir():
     """Create ~/.claude/crew-hub with mode 0700 (umask can only remove bits)."""
     d = hub_dir()
     try:
         os.makedirs(d, 0o700)
     except FileExistsError:
+        pass
+    return d
+
+
+def ensure_answers_dir():
+    """Create ~/.claude/crew-hub/answers with mode 0700 and tighten it if someone loosened it."""
+    ensure_hub_dir()
+    d = answers_dir()
+    try:
+        os.mkdir(d, 0o700)
+    except FileExistsError:
+        pass
+    try:
+        if os.stat(d).st_mode & 0o077:
+            os.chmod(d, 0o700)
+    except OSError:
         pass
     return d

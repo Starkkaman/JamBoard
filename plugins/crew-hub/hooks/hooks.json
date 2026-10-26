@@ -1,5 +1,5 @@
 {
-  "description": "Crew Hub reporter: redacts each hook payload and appends one line to ~/.claude/crew-hub/spool.jsonl. Prints nothing, always exits 0.",
+  "description": "Crew Hub reporter: redacts each hook payload and appends one line to ~/.claude/crew-hub/spool.jsonl. Prints nothing and exits 0, except a PermissionRequest decision when Home Assistant answers a held prompt (commands enabled).",
   "hooks": {
     "SessionStart": [
       {
@@ -119,6 +119,18 @@
       }
     ],
     "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/crew-hook\"",
+            "timeout": 65
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
       {
         "matcher": "*",
         "hooks": [

@@ -5,6 +5,7 @@ import unittest
 
 import _util
 from crewhub import mqtt
+from crewhub.commands import CommandHandler
 from crewhub.config import Config
 from crewhub.daemon import MqttLink
 
@@ -112,17 +113,18 @@ class MqttLinkTest(unittest.TestCase):
             cfg = Config({"machineId": "NAS box", "mqtt": {"host": "127.0.0.1", "port": broker.port,
                                                            "username": "crew-nas", "password": "s3cret"}})
             self.assertEqual(cfg.topic("snapshot"), "crew/nas-box/snapshot")
-            link = MqttLink(cfg, logs.append)
+            handler = CommandHandler(cfg.commands, logs.append)  # no secret: every command is dropped unverified
+            link = MqttLink(cfg, logs.append, handler)
             broker.to_client = [mqtt.build_publish("crew/nas-box/cmd", b'{"id":"r","action":"stop"}', qos=1,
                                                    retain=True, packet_id=3),
                                 mqtt.build_publish("crew/nas-box/cmd", b'{"id":"9","action":"send_message","args":{"text":"T0P"}}',
                                                    qos=1, packet_id=4)]
             self.assertFalse(link.publish(b'{"s":1}'))  # not connected yet: kept as pending
             self.assertTrue(wait(lambda: link.step(0.05) and len(broker.publishes) >= 2 and
-                                 any("id=9" in m for m in logs)))
+                                 sum("cmd dropped" in m for m in logs) >= 2))
             self.assertEqual(broker.publishes[0], ("crew/nas-box/status", b"online", 1, True))
             self.assertEqual(broker.publishes[1], ("crew/nas-box/snapshot", b'{"s":1}', 1, True))
-            self.assertTrue(any("retained" in m for m in logs))
+            self.assertEqual(handler.acks(), [])  # unsigned: no ack at all
             self.assertFalse(any("T0P" in m for m in logs))  # command args are never logged
             self.assertFalse(any("s3cret" in m for m in logs))
             link.offline()

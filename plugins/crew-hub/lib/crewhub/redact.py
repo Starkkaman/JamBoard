@@ -30,6 +30,51 @@ def clip(value, limit):
     return line
 
 
+def clip_text(value, limit):
+    """Whitespace collapsed to single spaces, cut to `limit` characters (ending in "…"); None for non-strings/empty.
+    crew-hook uses the same function to map clipped question/label text from HA back to the full text."""
+    if not isinstance(value, str):
+        return None
+    line = " ".join(value.split())
+    if not line:
+        return None
+    if len(line) > limit:
+        line = line[: limit - 1].rstrip() + "\u2026"
+    return line
+
+
+QUESTION_MAX = 200
+MAX_QUESTIONS = 4
+MAX_OPTIONS = 6
+
+
+def questions(tool_input):
+    """AskUserQuestion questions for the hub: question, header, multiSelect, option labels (each ≤200, max 4×6).
+    Option descriptions and anything else in the input are dropped."""
+    qs = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    if not isinstance(qs, list):
+        return None
+    out = []
+    for q in qs[:MAX_QUESTIONS]:
+        if not isinstance(q, dict):
+            continue
+        text = clip_text(q.get("question"), QUESTION_MAX)
+        if not text:
+            continue
+        item = {"question": text, "multiSelect": q.get("multiSelect") is True, "options": []}
+        header = clip_text(q.get("header"), QUESTION_MAX)
+        if header:
+            item["header"] = header
+        opts = q.get("options")
+        if isinstance(opts, list):
+            for o in opts[:MAX_OPTIONS]:
+                label = clip_text(o.get("label"), QUESTION_MAX) if isinstance(o, dict) else None
+                if label:
+                    item["options"].append(label)
+        out.append(item)
+    return out or None
+
+
 def _str(value, limit=200):
     if isinstance(value, str) and value:
         return value[:limit]

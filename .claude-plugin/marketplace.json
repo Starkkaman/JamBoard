@@ -7,7 +7,7 @@
       "name": "crew-hub",
       "source": "./plugins/crew-hub",
       "description": "Zero-token live progress of every Claude Code session and agent, published to Home Assistant over MQTT.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "mod"
     }
   ]

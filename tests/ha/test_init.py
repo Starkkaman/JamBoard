@@ -198,7 +198,7 @@ async def test_entities_follow_mqtt(hass: HomeAssistant, mqtt_mock, nas_snapshot
     assert hass.states.get("sensor.crew_hub_working").state == "1"
     needs = hass.states.get("binary_sensor.crew_hub_needs_me")
     assert needs.state == "on"
-    assert needs.attributes["sessions"] == ["Home Assistant Mr Manager"]
+    assert needs.attributes["sessions"] == ["Home Assistant Mr Manager", "Music Assistant tidy-up"]
 
     # same snapshot again: no new state write
     last = hass.states.get("sensor.crew_hub_working").last_reported

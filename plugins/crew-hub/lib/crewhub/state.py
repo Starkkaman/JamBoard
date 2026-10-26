@@ -12,6 +12,8 @@ import json
 import os
 import time
 
+from . import inbox
+
 MAX_AGENTS = 12
 TRAIL = 3
 MAX_TASKS = 50
@@ -24,6 +26,11 @@ PLAN_MAX_BYTES = 256 * 1024
 WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "SubagentStart")
 REGISTRY_STATUS = {"busy": "working", "idle": "idle"}
 SID_MAX = 100
+MAX_REQS = 8
+REQ_GRACE_MS = 15 * 1000  # a held request older than its hold + this can no longer be answered (hook gone)
+REQ_RESOLVED_SLACK_MS = 1000  # registry busy/idle this much after a request means it was answered elsewhere
+CLEAR_ALL_EVENTS = ("UserPromptSubmit", "SessionEnd")
+CLEAR_TOOL_EVENTS = ("PostToolUse", "PostToolUseFailure", "PermissionDenied")
 
 
 def now_ms():
@@ -239,11 +246,94 @@ class Model(object):
         return s
 
     def _set_status(self, s, status, at):
+        if status == "ended":
+            s.pop("_reqs", None)
+        reqs = s.get("_reqs")
+        if reqs and status != "ended":
+            status = "waiting"  # an open permission prompt/question outranks everything but the end
         if s["status"] != status:
             s["status"] = status
             s["_statusAt"] = at
         if status != "waiting":
             s["waiting"] = None
+        elif reqs:
+            s["waiting"] = _public_req(reqs[-1])
+
+    # ---- permission prompts and questions (requestId from crew-hook) --------------------------------------------
+    def _fold_requests(self, s, ev, rec, at):
+        """Track open requests in s["_reqs"] (oldest first); the newest one is session.waiting."""
+        reqs = s.get("_reqs") or []
+        before = len(reqs)
+        aid = rec.get("agent")
+        rid = rec.get("rid")
+        if ev == "PermissionRequest" and isinstance(rid, str):
+            tool = rec.get("tool")
+            w = {
+                "kind": "question" if tool == "AskUserQuestion" else "permission",
+                "requestId": rid,
+                "tool": tool,
+                "text": step_text(rec) if tool else None,
+                "since": at,
+                "hubCanAnswer": rec.get("hold") is True,
+            }
+            if isinstance(rec.get("questions"), list):
+                w["questions"] = rec["questions"]
+            if aid:
+                w["_agent"] = aid
+            if isinstance(rec.get("holdS"), (int, float)):
+                w["_holdS"] = rec["holdS"]
+            reqs = [r for r in reqs if r.get("requestId") != rid] + [w]
+            reqs = reqs[-MAX_REQS:]
+        elif ev == "answered" and isinstance(rid, str):
+            reqs = [r for r in reqs if r.get("requestId") != rid]
+        elif ev == "unanswered" and isinstance(rid, str):
+            # The hold ended but the prompt may still be open in the terminal/claude.ai: keep it, not answerable here.
+            for r in reqs:
+                if r.get("requestId") == rid:
+                    r["hubCanAnswer"] = False
+        elif ev in CLEAR_ALL_EVENTS or (ev in ("Stop", "StopFailure") and not aid):
+            reqs = []
+        elif ev == "SubagentStop" and aid:
+            reqs = [r for r in reqs if r.get("_agent") != aid]
+        elif ev in CLEAR_TOOL_EVENTS:
+            tool = rec.get("tool")
+            for i, r in enumerate(reqs):
+                if r.get("tool") == tool and r.get("_agent") == aid:
+                    del reqs[i]
+                    break
+        if reqs:
+            s["_reqs"] = reqs
+        else:
+            s.pop("_reqs", None)
+        if before and not reqs and s["status"] == "waiting" and ev not in ("SessionEnd",):
+            # the last open request is gone; the event handler below may set a more precise status
+            s["status"] = "working"
+            s["_statusAt"] = at
+            s["waiting"] = None
+        elif reqs:
+            self._set_status(s, "waiting", at)
+
+    def waiting_state(self, sid, rid):
+        """("ok", kind) when `rid` is an open request of `sid` that crew-hook is holding, else ("not_waiting", None)."""
+        s = self.sessions.get(sid)
+        for r in (s.get("_reqs") or []) if s else []:
+            if r.get("requestId") == rid:
+                if r.get("hubCanAnswer") is True:
+                    return "ok", r.get("kind")
+                break
+        return "not_waiting", None
+
+    def _expire_requests(self, s, now):
+        changed = False
+        for r in s.get("_reqs") or []:
+            if r.get("hubCanAnswer") is True:
+                hold = r.get("_holdS") if isinstance(r.get("_holdS"), (int, float)) else 55
+                if now - (r.get("since") or 0) > hold * 1000 + REQ_GRACE_MS:
+                    r["hubCanAnswer"] = False
+                    changed = True
+        if changed and s.get("_reqs") and s["status"] == "waiting":
+            s["waiting"] = _public_req(s["_reqs"][-1])
+        return changed
 
     def _agent(self, s, aid, at):
         for a in s["agents"]:
@@ -308,6 +398,7 @@ class Model(object):
 
         tool = rec.get("tool")
         aid = rec.get("agent")
+        self._fold_requests(s, ev, rec, at)
 
         if ev in WORKING_EVENTS:
             self._set_status(s, "working", at)
@@ -366,11 +457,14 @@ class Model(object):
         elif ev == "TaskCompleted" and rec.get("task_id"):
             self._task(s, rec["task_id"], rec.get("subject"))["status"] = "completed"
         elif ev == "PermissionRequest":
-            self._set_status(s, "waiting", at)
-            s["waiting"] = {"kind": "permission", "tool": tool, "text": step_text(rec) if tool else None}
+            if not isinstance(rec.get("rid"), str):  # older crew-hook without request ids
+                self._set_status(s, "waiting", at)
+                s["waiting"] = {"kind": "permission", "tool": tool, "text": step_text(rec) if tool else None}
         elif ev == "Notification":
             kind = self._notification_kind(rec)
-            if kind:
+            if kind and s.get("_reqs"):
+                self._set_status(s, "waiting", at)
+            elif kind:
                 self._set_status(s, "waiting", at)
                 prev = s.get("waiting") or {}
                 s["waiting"] = {"kind": kind, "tool": prev.get("tool"), "text": rec.get("msg") or prev.get("text")}
@@ -380,6 +474,9 @@ class Model(object):
                 s["summary"] = rec["msg"]
         elif ev == "StopFailure" and not aid:
             self._set_status(s, "idle", at)
+        elif ev == "PermissionDenied":
+            if s["status"] == "waiting":
+                self._set_status(s, "working", at)
         elif ev == "SessionEnd":
             self._set_status(s, "ended", at)
             s["_endedAt"] = at
@@ -437,6 +534,8 @@ class Model(object):
             if s["status"] != "ended":
                 self._enrich_transcript(s)
                 self._check_alive(s, now)
+                if s.get("_reqs") and self._expire_requests(s, now):
+                    self.changed = True
         if plans_dir:
             self.poll_plans(plans_dir, sessions_dir, now)
         self.prune(now)
@@ -469,7 +568,10 @@ class Model(object):
                 best[sid] = (key, d)
         for sid, ((alive, _), d) in best.items():
             s = self.sessions[sid]
-            before = (s.get("name"), s.get("ccr"), s["status"], s.get("_pid"))
+            before = (s.get("name"), s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
+                      len(s.get("_reqs") or []))
+            s["kind"] = inbox.entry_kind(d)
+            s["_inbox"] = bool(alive and inbox.inbox_ready(sessions_dir, d))
             if isinstance(d.get("name"), str):
                 s["name"] = d["name"][:200]
             if isinstance(d.get("bridgeSessionId"), str):
@@ -479,12 +581,20 @@ class Model(object):
                 s["_pidSrc"] = "sessions"
             fstat = d.get("status")
             fat = d.get("statusUpdatedAt") or d.get("updatedAt") or 0
+            reqs = s.get("_reqs")
+            if alive and reqs and fstat in REGISTRY_STATUS and isinstance(fat, (int, float)):
+                newest = max(r.get("since") or 0 for r in reqs)
+                if fat > newest + REQ_RESOLVED_SLACK_MS:
+                    # Claude Code left the prompt (answered in the terminal/claude.ai, or the turn was cut).
+                    s.pop("_reqs", None)
+                    self._set_status(s, REGISTRY_STATUS[fstat], int(fat))
             if alive and isinstance(fat, (int, float)) and fat > (s.get("_statusAt") or 0) + 1000:
                 if fstat == "idle" and s["status"] == "working":
                     self._set_status(s, "idle", int(fat))
                 elif fstat == "busy" and s["status"] == "idle":
                     self._set_status(s, "working", int(fat))
-            if before != (s.get("name"), s.get("ccr"), s["status"], s.get("_pid")):
+            if before != (s.get("name"), s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
+                          len(s.get("_reqs") or [])):
                 self.changed = True
 
     def _enrich_transcript(self, s):
@@ -627,19 +737,45 @@ class Model(object):
 
     # ---- snapshot -----------------------------------------------------------------------------------------------
     @staticmethod
-    def _public(s):
+    def _controls(s, commands_active):
+        """The command actions HA may offer for this session (docs/COMMANDS.md)."""
+        if not commands_active or s["status"] == "ended":
+            return []
+        out = []
+        if s.get("_inbox"):
+            out.append("send")
+        w = s.get("waiting")
+        if isinstance(w, dict) and w.get("requestId") and w.get("hubCanAnswer") is True:
+            out.append("answer")
+        if s.get("kind") == "bg" and s.get("_pid"):
+            out += ["interrupt", "stop"]
+        return out
+
+    @classmethod
+    def _public(cls, s, commands_active=False):
         out = {k: v for k, v in s.items() if not k.startswith("_")}
         out["agents"] = [dict(a, trail=list(a.get("trail") or [])) for a in s["agents"]]
         out["tasks"] = [dict(t) for t in s["tasks"]]
+        out["kind"] = s.get("kind") or "interactive"
+        out["controls"] = cls._controls(s, commands_active)
+        if isinstance(out.get("waiting"), dict):
+            out["waiting"] = _public_req(out["waiting"])
         return out
 
-    def snapshot(self, machine):
+    def snapshot(self, machine, commands_active=False):
         order = sorted(
             self.sessions.values(), key=lambda s: (s["status"] == "ended", -(s.get("updatedAt") or 0))
         )
-        sessions = [self._public(s) for s in order]
+        sessions = [self._public(s, commands_active) for s in order]
         snap = {"machine": machine, "sessions": sessions}
         return cap_snapshot(snap)
+
+
+def _public_req(w):
+    out = {k: v for k, v in w.items() if not k.startswith("_")}
+    if isinstance(out.get("questions"), list):
+        out["questions"] = [dict(q, options=list(q.get("options") or [])) for q in out["questions"] if isinstance(q, dict)]
+    return out
 
 
 def _size(snap):

@@ -1,11 +1,21 @@
 {
   "nas": {
     "status": "online",
-    "machine": {"id": "nas", "name": "nas", "version": "0.1.0", "updatedAt": "2026-10-26T14:29:58Z"},
+    "machine": {
+      "id": "nas", "name": "nas", "version": "0.2.0", "updatedAt": "2026-10-26T14:29:58Z",
+      "commands": {
+        "enabled": true,
+        "folders": [{"key": "jamfin", "label": "Jamfin"}, {"key": "crew-hub", "label": "Crew Hub"}, {"key": "home-assistant", "label": "Home Assistant"}],
+        "models": ["claude-opus-5-5", "claude-sonnet-5"],
+        "permissionModes": ["default", "acceptEdits", "auto", "plan"]
+      }
+    },
     "sessions": [
       {
         "id": "8c1f2a4e-3b7d-4e19-9a61-0f2d5c7b9e10",
         "ccr": "session_01BPprSFdhBQg3taJLueQEUy",
+        "kind": "interactive",
+        "controls": ["send", "answer"],
         "name": "Jamfin",
         "project": "jamfin",
         "status": "working",
@@ -69,10 +79,12 @@
       {
         "id": "4d2b9c71-8a0e-4f3b-b5d6-91c7e2a0f4b8",
         "ccr": "session_012zoHCHE3a15umwYuRC4XwL",
+        "kind": "interactive",
+        "controls": ["send", "answer"],
         "name": "Home Assistant Mr Manager",
         "project": "home-assistant",
         "status": "waiting",
-        "waiting": {"kind": "permission", "tool": "Bash", "text": "Reconnect adb to the Hisense TV", "requestId": "req_7f31a2", "options": ["allow", "deny"]},
+        "waiting": {"kind": "permission", "tool": "Bash", "text": "Reconnect adb to the Hisense TV", "requestId": "req_7f31a2", "since": "2026-10-26T14:26:30Z", "hubCanAnswer": true},
         "summary": "Checking why the TV's picture-mode entity went unavailable after the reboot.",
         "model": "claude-opus-5-5",
         "effort": "medium",
@@ -84,8 +96,51 @@
         "agents": []
       },
       {
+        "id": "6a0e7d52-1f84-4c3b-9d27-58b1e3c4a9f6",
+        "ccr": null,
+        "kind": "bg",
+        "controls": ["send", "answer", "interrupt", "stop"],
+        "name": "Music Assistant tidy-up",
+        "project": "pi-sendspin",
+        "status": "waiting",
+        "waiting": {
+          "kind": "question", "tool": "AskUserQuestion", "text": "Which player should stay the default?", "requestId": "req_c41d09",
+          "since": "2026-10-26T14:28:10Z", "hubCanAnswer": true,
+          "questions": [{"question": "Which player should stay the default?", "header": "Player", "multiSelect": false, "options": ["Kitchen Pi", "OnePlus 5T"]}]
+        },
+        "summary": "Cleaning up duplicate Sendspin players in Music Assistant.",
+        "model": "claude-sonnet-5",
+        "effort": "medium",
+        "ctx": {"used": 38000, "max": 200000},
+        "costUsd": 0.41,
+        "startedAt": "2026-10-26T14:02:00Z",
+        "updatedAt": "2026-10-26T14:28:10Z",
+        "tasks": [],
+        "agents": []
+      },
+      {
+        "id": "e5c7a913-0b2d-4f6e-8a14-c3d5e7f9a1b2",
+        "ccr": null,
+        "kind": "bg",
+        "controls": ["send", "interrupt", "stop"],
+        "name": "error demo",
+        "project": "crew-hub",
+        "status": "idle",
+        "summary": "Preview only: every command to this session comes back with an error.",
+        "model": "claude-opus-5-5",
+        "effort": "low",
+        "ctx": {"used": 12000, "max": 200000},
+        "costUsd": 0.05,
+        "startedAt": "2026-10-26T13:00:00Z",
+        "updatedAt": "2026-10-26T13:10:00Z",
+        "tasks": [],
+        "agents": []
+      },
+      {
         "id": "b8e41f03-2c6a-47d9-8e15-3a90c6d2f7e1",
         "ccr": null,
+        "kind": "bg",
+        "controls": ["send", "answer", "interrupt", "stop"],
         "name": "Crew Hub",
         "project": "crew-hub",
         "status": "idle",

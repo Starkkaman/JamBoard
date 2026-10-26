@@ -8,6 +8,7 @@ import time
 import unittest
 
 import _util
+from crewhub import VERSION
 from crewhub.redact import redact
 from crewhub.spool import Spool
 
@@ -84,7 +85,7 @@ class DaemonSmokeTest(unittest.TestCase):
         self.start()
         self.assertTrue(wait(lambda: self.snapshot()["sessions"][0]["status"] == "idle"))
         snap = self.snapshot()
-        self.assertEqual(snap["machine"]["version"], "0.1.0")
+        self.assertEqual(snap["machine"]["version"], VERSION)
         s = snap["sessions"][0]
         self.assertEqual(s["id"], SID)
         self.assertEqual(s["agents"][0]["title"], "Say hi test")

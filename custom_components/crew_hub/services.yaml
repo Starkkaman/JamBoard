@@ -1,0 +1,30 @@
+send_message:
+  fields:
+    machine: {required: true, selector: {text: {}}}
+    session: {required: true, selector: {text: {}}}
+    text: {required: true, selector: {text: {multiline: true}}}
+    urgent: {default: false, selector: {boolean: {}}}
+answer:
+  fields:
+    machine: {required: true, selector: {text: {}}}
+    session: {required: true, selector: {text: {}}}
+    requestId: {required: true, selector: {text: {}}}
+    decision: {required: true, selector: {select: {options: ["allow", "deny"]}}}
+    message: {selector: {text: {}}}
+    answers: {selector: {object: {}}}
+interrupt:
+  fields:
+    machine: {required: true, selector: {text: {}}}
+    session: {required: true, selector: {text: {}}}
+stop:
+  fields:
+    machine: {required: true, selector: {text: {}}}
+    session: {required: true, selector: {text: {}}}
+start_session:
+  fields:
+    machine: {required: true, selector: {text: {}}}
+    folder: {required: true, selector: {text: {}}}
+    model: {required: true, selector: {text: {}}}
+    permissionMode: {required: true, selector: {text: {}}}
+    name: {required: true, selector: {text: {}}}
+    prompt: {required: true, selector: {text: {multiline: true}}}

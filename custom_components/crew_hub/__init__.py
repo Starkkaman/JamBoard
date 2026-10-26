@@ -2,7 +2,8 @@
 
 docs/DESIGN.md §1: each machine's crew-hubd publishes <prefix>/<machine>/snapshot (retained) and <prefix>/<machine>/status
 (LWT). This integration mirrors them in memory (store.py, never recorded), pushes changes to admin websocket subscribers
-(websocket.py) and exposes a few summary entities.
+(websocket.py) and exposes a few summary entities. Admin users can send signed commands back to a machine
+(commands.py, docs/COMMANDS.md) through crew_hub/command or the crew_hub.* services; acks arrive on <prefix>/+/ack.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from . import websocket
+from . import commands, services, websocket
 from .const import (
     CARD_FILENAME,
     CARD_URL,
@@ -49,6 +50,7 @@ CrewHubConfigEntry = ConfigEntry[CrewStore]
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the websocket commands once per Home Assistant run."""
     websocket.async_register(hass)
+    services.async_register(hass)
     return True
 
 
@@ -74,6 +76,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
 
     for topic in store.topics:
         entry.async_on_unload(await mqtt.async_subscribe(hass, topic, _message, qos=1, encoding=None))
+
+    @callback
+    def _ack(msg: mqtt.ReceiveMessage) -> None:
+        commands.handle_ack(hass, prefix, msg.topic, msg.payload)
+
+    entry.async_on_unload(await mqtt.async_subscribe(hass, f"{prefix}/+/ack", _ack, qos=1, encoding=None))
 
     store.active = True
     await _async_register_frontend(hass)

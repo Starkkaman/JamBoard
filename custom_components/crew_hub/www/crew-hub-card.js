@@ -2,7 +2,11 @@
    No build step, no deps. Snapshot text is untrusted: DOM APIs + textContent only, never innerHTML with data.
    API: el.setSnapshots({<machineId>: snapshot}), setConfig(config), set hass(h), getCardSize().
    In Home Assistant the feed is the crew_hub integration's admin-only websocket subscription (crew_hub/subscribe):
-   {"type":"full","machines":{id: {status, snapshot, receivedAt, configured}}} then {"type":"machine","id","data"} per change. */
+   {"type":"full","machines":{id: {status, snapshot, receivedAt, configured}}} then {"type":"machine","id","data"} per change.
+   Commands (docs/COMMANDS.md): with a live hass connection and machine.commands.enabled, each session gets controls for
+   the actions in session.controls, sent as hass.connection.sendMessagePromise({type:"crew_hub/command", machine, action, args}).
+   The card re-renders on every snapshot (~1/s): session articles and their controls are keyed and kept, controls are
+   rebuilt only when their inputs change, and drafts/focus/caret/open state live in Maps on the card. */
 (() => {
 const FONT_HREF = "https://fonts.googleapis.com/css2?family=Londrina+Solid:wght@400;900&family=Jost:wght@400;500;600&display=swap";
 
@@ -67,6 +71,39 @@ h2{font-size:1.45rem} h3{font-size:1.1rem}
 .trail time{font-variant-numeric:tabular-nums;flex:none}
 .muted{color:var(--dim);font-size:.85rem}
 .empty{color:var(--dim);background:var(--slab);padding:16px}
+[hidden]{display:none!important}
+.slot{display:contents}
+
+/* commands */
+button{font:600 .8rem/1 var(--body);letter-spacing:.12em;text-transform:uppercase;background:var(--ochre);color:var(--ink);border:0;padding:11px 14px;cursor:pointer;min-height:40px;border-radius:0}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--paper);outline-offset:2px}
+button:disabled{opacity:.5;cursor:default}
+.btn-o{background:transparent;color:var(--paper);border:1.5px solid currentColor}
+.btn-o.sm{font-size:.72rem;padding:8px 12px}
+.btn-o[aria-pressed="true"]{background:var(--ochre);color:var(--ink);border-color:var(--ochre)}
+button.armed{background:var(--red);color:var(--paper);border-color:var(--red)}
+.in{background:var(--slab2);color:var(--paper);border:1.5px solid var(--line);padding:8px 10px;font:inherit;min-height:40px;width:100%;min-width:0;border-radius:0;margin:0}
+.in:focus-visible{outline:2px solid var(--paper);outline-offset:0}
+textarea.in{resize:none;display:block;line-height:1.5}
+textarea.in.tall{resize:vertical;min-height:88px}
+.ctl{display:grid;gap:10px;min-width:0}
+.grp{display:grid;gap:8px;min-width:0}
+.line{display:flex;gap:8px;align-items:flex-end;min-width:0}
+.line>.in{flex:1}
+.btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-width:0}
+.check{display:inline-flex;gap:8px;align-items:center;min-height:40px;cursor:pointer;font-weight:500}
+.check input{width:20px;height:20px;margin:0;accent-color:var(--ochre)}
+.hint{color:var(--dim);font-size:.8rem}
+.q{display:grid;gap:6px;min-width:0}
+.q>div:first-child{overflow-wrap:anywhere}
+.fb{font-size:.85rem;overflow-wrap:anywhere}
+.fb:empty{display:none}
+.fb.ok{color:var(--teal)} .fb.err{color:var(--red)}
+.diag{background:var(--slab);padding:10px 14px}
+.diag summary{cursor:pointer;min-height:40px;display:flex;align-items:center}
+.form{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));margin-top:8px}
+.field{display:grid;gap:4px;min-width:0}
+.form>.wide{grid-column:1/-1}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 `;
 
@@ -112,7 +149,23 @@ class CrewHubCard extends HTMLElement {
     const style = document.createElement("style");
     style.textContent = CSS;
     this._root = this._el("div", "wrap");
+    // Persistent layout: slots are rebuilt per render, the New-session box and session articles are kept and patched.
+    this._headSlot = this._el("div", "slot");
+    this._noteSlot = this._el("div", "slot");
+    this._newSlot = this._el("div", "slot");
+    this._flowSlot = this._el("div", "slot");
+    this._sessBox = this._el("section", "sessions");
+    this._sessBox.setAttribute("aria-live", "polite");
+    this._root.append(this._headSlot, this._noteSlot, this._newSlot, this._flowSlot, this._sessBox);
     this.shadowRoot.append(style, this._root);
+    // Command UI state that must survive re-renders.
+    this._arts = new Map();    // "mid|sid" -> {el, top, ctl, bottom, parts}
+    this._drafts = new Map();  // data-key -> typed value / checkbox state / selected labels
+    this._fb = new Map();      // feedback key -> {text, cls, timer}
+    this._confirm = new Map(); // two-tap key -> timer
+    this._busy = new Set();    // feedback keys with a command in flight
+    this._newOpen = false;
+    this._newSig = null;
   }
 
   connectedCallback() {
@@ -212,19 +265,43 @@ class CrewHubCard extends HTMLElement {
       const offline = str(snap.status || m.status).toLowerCase() === "offline";
       const unconfigured = snap.configured === false;
       const mname = str(m.name || m.id || mid);
-      for (const s of arr(snap.sessions)) if (s && typeof s === "object") out.push({s, mname, offline, unconfigured});
+      const canCmd = !!(m.commands && m.commands.enabled === true) && !offline && !unconfigured;
+      for (const s of arr(snap.sessions)) if (s && typeof s === "object") out.push({s, mid, mname, offline, unconfigured, canCmd});
     }
     return out;
   }
 
   /* ---- render ---- */
   _render() {
+    const focus = this._captureFocus();
     this._tickers = [];
-    const root = this._root;
-    const parts = [this._renderHeader()];
-    if (this._hubError) parts.push(this._el("div", "muted", "Crew Hub integration not available"));
-    root.replaceChildren(...parts, this._renderFlow(), this._renderSessions());
+    this._headSlot.replaceChildren(this._renderHeader());
+    this._noteSlot.replaceChildren(...(this._hubError ? [this._el("div", "muted", "Crew Hub integration not available")] : []));
+    this._syncNew();
+    this._flowSlot.replaceChildren(this._renderFlow());
+    this._syncSessions();
+    this._restoreFocus(focus);
   }
+
+  // Fallback for the rare rebuild of a focused control (session reordered, waiting prompt changed, machine changed).
+  _captureFocus() {
+    const a = this.shadowRoot.activeElement;
+    if (!a || !a.dataset || !a.dataset.key) return null;
+    const f = {key: a.dataset.key, top: a.scrollTop};
+    try { if (typeof a.selectionStart === "number") { f.s = a.selectionStart; f.e = a.selectionEnd; f.d = a.selectionDirection; } } catch (e) { /* no selection */ }
+    return f;
+  }
+  _restoreFocus(f) {
+    if (!f) return;
+    const cur = this.shadowRoot.activeElement;
+    if (cur && cur.dataset && cur.dataset.key === f.key) return;
+    const el = this._find("key", f.key)[0];
+    if (!el) return;
+    el.focus({preventScroll: true});
+    try { if (f.s != null) el.setSelectionRange(f.s, f.e, f.d); } catch (e) { /* not a text field */ }
+    el.scrollTop = f.top;
+  }
+  _find(attr, val) { return [...this.shadowRoot.querySelectorAll(`[data-${attr}]`)].filter(e => e.dataset[attr] === val); }
 
   _renderHeader() {
     const top = this._el("header", "top");
@@ -295,25 +372,43 @@ class CrewHubCard extends HTMLElement {
     return sec;
   }
 
-  _renderSessions() {
-    const box = this._el("section", "sessions");
-    box.setAttribute("aria-live", "polite");
+  _syncSessions() {
+    const box = this._sessBox;
     const list = this._sessions().sort((a, b) =>
       ((ORDER[a.s.status] ?? 2) - (ORDER[b.s.status] ?? 2)) || cmpDesc(a.s.updatedAt, b.s.updatedAt)).slice(0, 12);
     if (!list.length) {
-      box.append(this._el("div", "empty", "Your Claude Code sessions appear here, working ones first, with every agent inside them and what each is doing right now."));
-      return box;
+      this._arts.clear();
+      box.replaceChildren(this._el("div", "empty", "Your Claude Code sessions appear here, working ones first, with every agent inside them and what each is doing right now."));
+      return;
     }
-    for (const x of list) box.append(this._renderSession(x));
-    return box;
+    const want = [], seen = new Set();
+    for (const x of list) {
+      const key = x.mid + "|" + str(x.s.id || x.s.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let a = this._arts.get(key);
+      if (!a) {
+        a = {el: this._el("article"), top: this._el("div", "slot"), ctl: this._el("div", "ctl"), bottom: this._el("div", "slot"), parts: {}};
+        a.el.append(a.top, a.ctl, a.bottom);
+        this._arts.set(key, a);
+      }
+      this._fillSession(a, x, key);
+      want.push(a.el);
+    }
+    for (const [k, a] of this._arts) if (!seen.has(k)) { a.el.remove(); this._arts.delete(k); }
+    for (const c of [...box.children]) if (!want.includes(c)) c.remove();
+    // Move only what is out of place, so an unchanged order never detaches (and blurs) a focused control.
+    want.forEach((el, i) => { if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null); });
   }
 
-  _renderSession({s, mname, offline, unconfigured}) {
+  _fillSession(a, x, key) {
+    const {s, mname, offline, unconfigured} = x;
     const [cls, label] = SESS[s.status] || SESS.idle;
-    const box = this._el("article", "sess " + cls);
+    a.el.className = "sess " + cls;
+    const box = a.top;
     const r = this._el("div", "row");
     r.append(this._el("h3", "name", s.name || s.project || s.id || "Session"), this._el("span", "chip c-" + cls, label));
-    box.append(r);
+    box.replaceChildren(r);
     if (s.summary) box.append(this._el("div", "summary", s.summary));
     if (s.status === "waiting" && s.waiting) {
       const w = this._el("div", "waiting");
@@ -330,12 +425,15 @@ class CrewHubCard extends HTMLElement {
     if (offline) m.append(this._el("span", null, "computer offline"));
     if (unconfigured) m.append(this._el("span", null, "unconfigured"));
     box.append(m);
+    this._syncControls(a, x, key);
+    const bottom = a.bottom;
+    bottom.replaceChildren();
     const cx = s.ctx;
     if (cx && Number(cx.max) > 0) {
       const pct = Math.max(0, Math.min(100, Math.round(100 * (Number(cx.used) || 0) / Number(cx.max))));
       const c = this._el("div", "ctx" + (pct > 85 ? " hot" : "")), i = this._el("i");
       i.style.width = pct + "%"; c.append(i);
-      box.append(this._el("span", "label", `Context ${pct}%`), c);
+      bottom.append(this._el("span", "label", `Context ${pct}%`), c);
     }
     const agents = arr(s.agents).filter(a => a && typeof a === "object");
     if (agents.length) {
@@ -343,10 +441,304 @@ class CrewHubCard extends HTMLElement {
       const ag = this._el("div", "agents");
       agents.slice().sort((a, b) => ((a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1))
         || cmpDesc(a.current?.at || a.endedAt || a.startedAt, b.current?.at || b.endedAt || b.startedAt))
-        .slice(0, 8).forEach(a => ag.append(this._renderAgent(a, tiers.get(a.id))));
-      box.append(ag);
+        .slice(0, 8).forEach(g => ag.append(this._renderAgent(g, tiers.get(g.id))));
+      bottom.append(ag);
     }
-    return box;
+  }
+
+  /* ---- commands (docs/COMMANDS.md) ---- */
+  _live() {
+    const c = this._hass && this._hass.connection;
+    return !!(c && typeof c.sendMessagePromise === "function" && this._subToken && !this._hubError);
+  }
+
+  // Keep a control block while its signature is unchanged; rebuild it only when its inputs change.
+  _part(a, name, sig, build) {
+    if (!sig) { delete a.parts[name]; return; }
+    if (a.parts[name] && a.parts[name].sig === sig) return;
+    a.parts[name] = {sig, node: build()};
+  }
+
+  _syncControls(a, x, key) {
+    const s = x.s, allowed = arr(s.controls).filter(v => typeof v === "string");
+    const on = this._live() && x.canCmd;
+    const has = act => on && allowed.includes(act);
+    const w = s.waiting;
+    const ans = has("answer") && s.status === "waiting" && w && typeof w === "object" && w.hubCanAnswer === true && w.requestId ? w : null;
+    this._part(a, "ans", ans ? JSON.stringify([w.kind, w.requestId, w.tool, w.text, w.questions]) : "", () => this._buildAnswer(x, key, w));
+    this._part(a, "msg", has("send") ? "send" : "", () => this._buildMsg(x, key));
+    const bg = ["interrupt", "stop"].filter(has);
+    this._part(a, "bg", bg.join(","), () => this._buildBg(x, key, bg));
+    const nodes = ["ans", "msg", "bg"].map(n => a.parts[n] && a.parts[n].node).filter(Boolean);
+    for (const c of [...a.ctl.children]) if (!nodes.includes(c)) c.remove();
+    nodes.forEach((el, i) => { if (a.ctl.children[i] !== el) a.ctl.insertBefore(el, a.ctl.children[i] || null); });
+    a.ctl.hidden = !nodes.length;
+  }
+
+  _input(tag, key, attrs) {
+    const el = this._el(tag, "in");
+    el.dataset.key = key;
+    for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+    el.value = str(this._drafts.get(key));
+    el.addEventListener("input", () => { this._drafts.set(key, el.value); if (el.dataset.grow) this._grow(el); });
+    return el;
+  }
+  _grow(el) {
+    el.style.height = "auto";
+    const cs = getComputedStyle(el), line = parseFloat(cs.lineHeight) || 22.5;
+    const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    el.style.height = Math.min(el.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth), line * 3 + pad) + "px";
+  }
+  _btn(text, cls, key, grp, onClick) {
+    const b = this._el("button", cls || null, text);
+    b.type = "button";
+    if (key) b.dataset.key = key;
+    if (grp) { b.dataset.grp = grp; b.disabled = this._busy.has(grp); }
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  _fbNode(fk) {
+    const f = this._el("div", "fb");
+    f.dataset.fb = fk;
+    f.setAttribute("role", "status");
+    const cur = this._fb.get(fk);
+    if (cur) { f.textContent = cur.text; if (cur.cls) f.classList.add(cur.cls); }
+    return f;
+  }
+  _setFb(fk, text, cls) {
+    const prev = this._fb.get(fk);
+    if (prev && prev.timer) clearTimeout(prev.timer);
+    const entry = {text, cls, timer: null};
+    if (cls) entry.timer = setTimeout(() => { this._fb.delete(fk); this._paintFb(fk); }, 6000);
+    this._fb.set(fk, entry);
+    this._paintFb(fk);
+  }
+  _paintFb(fk) {
+    const cur = this._fb.get(fk);
+    for (const f of this._find("fb", fk)) {
+      f.textContent = cur ? cur.text : "";
+      f.classList.toggle("ok", !!cur && cur.cls === "ok");
+      f.classList.toggle("err", !!cur && cur.cls === "err");
+    }
+  }
+  _setBusy(fk, on) {
+    if (on) this._busy.add(fk); else this._busy.delete(fk);
+    for (const b of this._find("grp", fk)) b.disabled = on;
+  }
+
+  // Two-tap confirm: the first tap arms the button ("Confirm stop?", red) for 4 s, the second tap runs it.
+  // guard() returns an error text when the action can't be sent yet; then the button isn't armed.
+  _twoTap(text, armedText, cls, key, grp, run, guard) {
+    const b = this._btn(text, cls, key, grp, () => {
+      if (this._confirm.has(key)) { this._disarm(key); run(); return; }
+      const err = guard && guard();
+      if (err) { this._setFb(grp, err, "err"); return; }
+      const t = setTimeout(() => this._disarm(key), 4000);
+      this._confirm.set(key, t);
+      this._paintArm(key);
+    });
+    b.dataset.confirm = key; b.dataset.label = text; b.dataset.armed = armedText;
+    this._paintArm(key, b);
+    return b;
+  }
+  _disarm(key) { clearTimeout(this._confirm.get(key)); this._confirm.delete(key); this._paintArm(key); }
+  _paintArm(key, only) {
+    const armed = this._confirm.has(key);
+    for (const b of only ? [only] : this._find("confirm", key)) {
+      b.textContent = armed ? b.dataset.armed : b.dataset.label;
+      b.classList.toggle("armed", armed);
+    }
+  }
+
+  async _send(fk, machine, action, args) {
+    const conn = this._hass && this._hass.connection;
+    if (!conn || typeof conn.sendMessagePromise !== "function") { this._setFb(fk, "Not connected to Home Assistant", "err"); return false; }
+    this._setBusy(fk, true);
+    this._setFb(fk, "Sending…", "");
+    let ok = false;
+    try {
+      const r = await conn.sendMessagePromise({type: "crew_hub/command", machine, action, args});
+      if (r && r.ok === true) { ok = true; this._setFb(fk, "Sent ✓", "ok"); }
+      else this._setFb(fk, CrewHubCard.errText(r && r.error, r && r.detail), "err");
+    } catch (e) {
+      this._setFb(fk, CrewHubCard.errText(e && e.code, e && e.message), "err");
+    } finally {
+      this._setBusy(fk, false);
+    }
+    return ok;
+  }
+  static errText(code, detail) {
+    const known = {
+      not_configured: "This machine isn't set up in Crew Hub", commands_disabled: "Commands are off on this machine",
+      offline: "Computer offline", not_allowed: "Not allowed for this session", unknown_session: "Session not found",
+      unknown_action: "Unknown command", no_ack: "No answer from the machine", not_waiting: "No longer waiting",
+      already_answered: "Already answered", unauthorized: "Admins only", publish_failed: "Couldn't publish to MQTT",
+      not_loaded: "Crew Hub isn't loaded",
+    };
+    if (code === "invalid_args") return detail ? "Invalid: " + str(detail) : "Invalid input";
+    return known[code] || str(detail || code || "Failed");
+  }
+
+  _buildMsg(x, key) {
+    const fk = key + "|msg";
+    const g = this._el("div", "grp");
+    const ta = this._input("textarea", key + "|text", {rows: "1", maxlength: "4000", "aria-label": "Message to " + str(x.s.name || x.s.project || "session"), placeholder: "Message"});
+    ta.dataset.grow = "1";
+    requestAnimationFrame(() => this._grow(ta));
+    const urgentKey = key + "|urgent";
+    const send = this._btn("Send", null, fk, fk, async () => {
+      const text = ta.value;
+      if (!text.trim()) { this._setFb(fk, "Type a message first", "err"); return; }
+      const urgent = !!this._drafts.get(urgentKey);
+      if (await this._send(fk, x.mid, "send", {session: str(x.s.id), text, urgent})) {
+        this._drafts.delete(key + "|text"); this._drafts.delete(urgentKey);
+        for (const el of this._find("key", key + "|text")) { el.value = ""; this._grow(el); }
+        for (const el of this._find("key", urgentKey)) el.checked = false;
+      }
+    });
+    const line = this._el("div", "line");
+    line.append(ta, send);
+    const chk = this._el("label", "check");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.dataset.key = urgentKey; cb.checked = !!this._drafts.get(urgentKey);
+    cb.addEventListener("change", () => this._drafts.set(urgentKey, cb.checked));
+    chk.append(cb, this._el("span", null, "Urgent"));
+    const opts = this._el("div", "btns");
+    opts.append(chk, this._el("span", "hint", "interrupts the current reply"));
+    g.append(line, opts, this._fbNode(fk));
+    return g;
+  }
+
+  _buildAnswer(x, key, w) {
+    const fk = key + "|ans", req = str(w.requestId), base = key + "|" + req;
+    const g = this._el("div", "grp");
+    const answer = args => this._send(fk, x.mid, "answer", Object.assign({session: str(x.s.id), requestId: req}, args));
+    if (w.kind === "question" && arr(w.questions).length) {
+      const qs = arr(w.questions).filter(q => q && typeof q === "object" && typeof q.question === "string");
+      const direct = qs.length === 1 && !qs[0].multiSelect;
+      qs.forEach((q, qi) => {
+        const box = this._el("div", "q");
+        box.append(this._el("div", null, q.question));
+        const btns = this._el("div", "btns");
+        const sk = base + "|q" + qi;
+        const labels = arr(q.options).map(o => (o && typeof o === "object" ? o.label : o)).filter(l => typeof l === "string" && l);
+        labels.forEach((lab, li) => {
+          const b = this._btn(lab, "btn-o", sk + "|o" + li, fk, () => {
+            if (direct) { answer({decision: "allow", answers: {[q.question]: lab}}); return; }
+            let sel = arr(this._drafts.get(sk));
+            sel = q.multiSelect ? (sel.includes(lab) ? sel.filter(v => v !== lab) : [...sel, lab]) : [lab];
+            this._drafts.set(sk, sel);
+            for (const [i, l] of labels.entries()) for (const el of this._find("key", sk + "|o" + i)) el.setAttribute("aria-pressed", String(sel.includes(l)));
+          });
+          if (!direct) b.setAttribute("aria-pressed", String(arr(this._drafts.get(sk)).includes(lab)));
+          btns.append(b);
+        });
+        box.append(btns);
+        g.append(box);
+      });
+      if (!direct) {
+        g.append(this._btn("Answer", null, base + "|answer", fk, () => {
+          const answers = {};
+          for (const [qi, q] of qs.entries()) {
+            const sel = arr(this._drafts.get(base + "|q" + qi));
+            if (!sel.length) { this._setFb(fk, "Pick an answer for each question", "err"); return; }
+            answers[q.question] = sel.join(", ");
+          }
+          answer({decision: "allow", answers});
+        }));
+      }
+    } else {
+      const note = this._input("input", base + "|note", {type: "text", maxlength: "500", placeholder: "Note (optional)", "aria-label": "Note with the answer"});
+      const msg = () => { const v = note.value.trim(); return v ? {message: v} : {}; };
+      const btns = this._el("div", "btns");
+      btns.append(
+        this._btn("Allow", null, base + "|allow", fk, () => answer(Object.assign({decision: "allow"}, msg()))),
+        this._btn("Deny", "btn-o", base + "|deny", fk, () => answer(Object.assign({decision: "deny"}, msg()))));
+      g.append(btns, note);
+    }
+    g.append(this._el("div", "hint", "or answer in claude.ai"), this._fbNode(fk));
+    return g;
+  }
+
+  _buildBg(x, key, acts) {
+    const fk = key + "|bg";
+    const g = this._el("div", "grp");
+    const btns = this._el("div", "btns");
+    for (const act of acts) {
+      const label = act === "stop" ? "Stop" : "Interrupt";
+      btns.append(this._twoTap(label, `Confirm ${act}?`, "btn-o sm", key + "|" + act, fk,
+        () => this._send(fk, x.mid, act, {session: str(x.s.id)})));
+    }
+    g.append(btns, this._fbNode(fk));
+    return g;
+  }
+
+  /* ---- New session ---- */
+  _startable() {
+    const out = [];
+    for (const [mid, snap] of Object.entries(this._snaps)) {
+      if (!snap || typeof snap !== "object") continue;
+      const m = snap.machine || {}, c = m.commands;
+      if (!c || c.enabled !== true || snap.configured === false || str(snap.status || m.status).toLowerCase() === "offline") continue;
+      out.push({
+        mid, name: str(m.name || m.id || mid),
+        folders: arr(c.folders).filter(f => f && typeof f.key === "string").map(f => ({key: f.key, label: str(f.label || f.key)})),
+        models: arr(c.models).filter(v => typeof v === "string"),
+        modes: arr(c.permissionModes).filter(v => typeof v === "string"),
+      });
+    }
+    return out;
+  }
+
+  _syncNew() {
+    const list = this._live() ? this._startable() : [];
+    const sig = JSON.stringify(list);
+    if (sig === this._newSig) return;
+    this._newSig = sig;
+    if (!list.length) { this._newSlot.replaceChildren(); return; }
+    const fk = "new|start";
+    const d = this._el("details", "diag");
+    d.open = this._newOpen;
+    d.addEventListener("toggle", () => { this._newOpen = d.open; });
+    const sum = this._el("summary", "label", "New session");
+    sum.dataset.key = "new|summary";
+    const form = this._el("div", "form");
+    const select = (key, label, options) => {
+      const f = this._el("label", "field");
+      const sel = this._el("select", "in");
+      sel.dataset.key = key;
+      for (const o of options) { const op = this._el("option", null, o.label); op.value = o.value; sel.append(op); }
+      const want = this._drafts.get(key);
+      sel.value = options.some(o => o.value === want) ? want : (options[0] ? options[0].value : "");
+      this._drafts.set(key, sel.value);
+      sel.addEventListener("change", () => { this._drafts.set(key, sel.value); if (key === "new|machine") { this._newSig = null; this._syncNew(); } });
+      f.append(this._el("span", "label", label), sel);
+      form.append(f);
+      return sel;
+    };
+    const mSel = select("new|machine", "Machine", list.map(m => ({value: m.mid, label: m.name})));
+    const mach = list.find(m => m.mid === mSel.value) || list[0];
+    const fSel = select("new|folder", "Folder", mach.folders.map(f => ({value: f.key, label: f.label})));
+    const modSel = select("new|model", "Model", mach.models.map(v => ({value: v, label: v.replace(/^claude-/, "")})));
+    const pSel = select("new|mode", "Permission mode", mach.modes.map(v => ({value: v, label: v})));
+    const field = (label, el) => { const f = this._el("label", "field wide"); f.append(this._el("span", "label", label), el); form.append(f); };
+    const name = this._input("input", "new|name", {type: "text", maxlength: "60", autocomplete: "off"});
+    const prompt = this._input("textarea", "new|prompt", {rows: "3", maxlength: "4000"});
+    prompt.classList.add("tall");
+    field("Name", name);
+    field("Prompt", prompt);
+    const start = this._twoTap("Start", "Confirm start?", null, "new|startbtn", fk, async () => {
+      const args = {folder: fSel.value, model: modSel.value, permissionMode: pSel.value, name: name.value.trim(), prompt: prompt.value};
+      if (await this._send(fk, mach.mid, "start", args)) {
+        for (const k of ["new|name", "new|prompt"]) { this._drafts.delete(k); for (const el of this._find("key", k)) el.value = ""; }
+      }
+    }, () => (name.value.trim() && prompt.value.trim() && fSel.value && modSel.value && pSel.value ? null : "Name and prompt are needed"));
+    const act = this._el("div", "btns wide");
+    const fb = this._fbNode(fk);
+    act.append(start, fb);
+    form.append(act);
+    d.append(sum, form);
+    this._newSlot.replaceChildren(d);
   }
 
   _renderAgent(a, task) {

@@ -4,8 +4,12 @@
       "user": {
         "title": "Crew Hub",
         "description": "Shows live Claude Code sessions reported by crew-hubd over MQTT. Each machine publishes under <prefix>/<machine>/.",
-        "data": {"prefix": "MQTT topic prefix"},
-        "data_description": {"prefix": "Must match \"prefix\" in each machine's ~/.claude/crew-hub/config.json."}
+        "data": {
+          "prefix": "MQTT topic prefix"
+        },
+        "data_description": {
+          "prefix": "Must match \"prefix\" in each machine's ~/.claude/crew-hub/config.json."
+        }
       }
     },
     "error": {
@@ -28,7 +32,11 @@
       },
       "add": {
         "title": "Add a machine",
-        "data": {"id": "Machine id", "name": "Display name", "secret": "Command secret"},
+        "data": {
+          "id": "Machine id",
+          "name": "Display name",
+          "secret": "Command secret"
+        },
         "data_description": {
           "id": "The machineId from the machine's crew-hub config (for example nas).",
           "secret": "The same command secret as on the machine (at least 16 characters)."
@@ -36,16 +44,25 @@
       },
       "edit": {
         "title": "Edit a machine",
-        "data": {"id": "Machine"}
+        "data": {
+          "id": "Machine"
+        }
       },
       "edit_machine": {
         "title": "Edit {machine}",
-        "data": {"name": "Display name", "secret": "New command secret"},
-        "data_description": {"secret": "Leave empty to keep the current secret."}
+        "data": {
+          "name": "Display name",
+          "secret": "New command secret"
+        },
+        "data_description": {
+          "secret": "Leave empty to keep the current secret."
+        }
       },
       "remove": {
         "title": "Remove a machine",
-        "data": {"id": "Machine"}
+        "data": {
+          "id": "Machine"
+        }
       }
     },
     "error": {
@@ -59,10 +76,126 @@
   },
   "entity": {
     "sensor": {
-      "working": {"name": "Working"}
+      "working": {
+        "name": "Working"
+      }
     },
     "binary_sensor": {
-      "needs_me": {"name": "Needs me"}
+      "needs_me": {
+        "name": "Needs me"
+      }
+    }
+  },
+  "services": {
+    "send_message": {
+      "name": "Send message",
+      "description": "Send a message to a Claude Code session (admin users only; not from automations).",
+      "fields": {
+        "machine": {
+          "name": "Machine",
+          "description": "Machine id as added in Crew Hub (for example nas)."
+        },
+        "session": {
+          "name": "Session",
+          "description": "Local session id from the machine's snapshot."
+        },
+        "text": {
+          "name": "Text",
+          "description": "Up to 4000 characters."
+        },
+        "urgent": {
+          "name": "Urgent",
+          "description": "Deliver now, interrupting the current reply."
+        }
+      }
+    },
+    "answer": {
+      "name": "Answer",
+      "description": "Answer a waiting permission prompt or question (admin users only; not from automations).",
+      "fields": {
+        "machine": {
+          "name": "Machine",
+          "description": "Machine id as added in Crew Hub (for example nas)."
+        },
+        "session": {
+          "name": "Session",
+          "description": "Local session id from the machine's snapshot."
+        },
+        "requestId": {
+          "name": "Request id",
+          "description": "waiting.requestId from the snapshot."
+        },
+        "decision": {
+          "name": "Decision",
+          "description": "allow or deny."
+        },
+        "message": {
+          "name": "Note",
+          "description": "Optional, up to 500 characters."
+        },
+        "answers": {
+          "name": "Answers",
+          "description": "For questions: question text to chosen label."
+        }
+      }
+    },
+    "interrupt": {
+      "name": "Interrupt",
+      "description": "Interrupt a background session's current turn (admin users only; not from automations).",
+      "fields": {
+        "machine": {
+          "name": "Machine",
+          "description": "Machine id as added in Crew Hub (for example nas)."
+        },
+        "session": {
+          "name": "Session",
+          "description": "Local session id from the machine's snapshot."
+        }
+      }
+    },
+    "stop": {
+      "name": "Stop",
+      "description": "Stop a background session (admin users only; not from automations).",
+      "fields": {
+        "machine": {
+          "name": "Machine",
+          "description": "Machine id as added in Crew Hub (for example nas)."
+        },
+        "session": {
+          "name": "Session",
+          "description": "Local session id from the machine's snapshot."
+        }
+      }
+    },
+    "start_session": {
+      "name": "Start session",
+      "description": "Start a background Claude Code session in a preset folder (admin users only; not from automations).",
+      "fields": {
+        "machine": {
+          "name": "Machine",
+          "description": "Machine id as added in Crew Hub (for example nas)."
+        },
+        "folder": {
+          "name": "Folder",
+          "description": "Folder preset key."
+        },
+        "model": {
+          "name": "Model",
+          "description": "One of the machine's allowed models."
+        },
+        "permissionMode": {
+          "name": "Permission mode",
+          "description": "One of the machine's allowed modes."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Up to 60 characters."
+        },
+        "prompt": {
+          "name": "Prompt",
+          "description": "Up to 4000 characters."
+        }
+      }
     }
   }
 }
