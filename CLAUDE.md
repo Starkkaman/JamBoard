@@ -4,8 +4,12 @@ Home Assistant hub for live progress of every Claude Code session/agent, with co
 Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESIGN.md. Evidence: docs/evidence/.
 
 ## Status
-- 2026-10-26: design proposal v1 written; waiting on the user for: socket-injection test permission, repo hosting
-  (GitHub vs Gitea), and later the HA batch (DESIGN.md §6). Nothing built, no HA changes.
+- 2026-10-26: design v1 (docs/DESIGN.md). Repo pushed to GitHub Starkkaman/JamBoard (deploy key ~/.ssh/github_jamboard_ed25519,
+  host alias github-jamboard). Build step 1 DONE: reporter (plugins/crew-hub, 47 tests) + card preview (card/).
+- MQTT verified: HA user crew-nas (non-admin, local only) logs in via auth_api; crew-hubd on the NAS publishes
+  crew/nas/status + crew/nas/snapshot (retained). Config ~/.claude/crew-hub/config.json (0600, has the password; never print it).
+- Plugin NOT yet installed into the NAS's sessions (auto mode wants the user's OK). Bridge tests (docs/evidence/bridge-tests.md) in progress.
+- Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
 ## People
 - Jamfin session = local name `project-ac` (CCR session_01BPprSFdhBQg3taJLueQEUy; PROMPT.md says "project-4c", wrong).
