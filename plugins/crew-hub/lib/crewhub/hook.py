@@ -109,12 +109,31 @@ def spawn_daemon():
     os._exit(0)
 
 
+SUMMARY_EVENTS = ("Stop", "SubagentStop")
+OFF = ("false", "off", "no", "0")
+
+
+def summaries_enabled():
+    """config.json "summaries" (default true). Missing, unreadable or odd config means enabled."""
+    try:
+        with open(paths.config_path(), "rb") as f:
+            v = json.loads(f.read(1024 * 1024)).get("summaries", True)
+    except Exception:
+        return True
+    if v is False or (isinstance(v, int) and not isinstance(v, bool) and v == 0):
+        return False
+    return not (isinstance(v, str) and v.strip().lower() in OFF)
+
+
 def run(raw):
     try:
         payload = json.loads(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw)
     except Exception:
         payload = {}
-    rec = redact(payload, round(time.time(), 3), claude_pid(), paths.plans_dir())
+    # Only Stop/SubagentStop carry a summary, so only they pay for reading config.json.
+    ev = payload.get("hook_event_name") if isinstance(payload, dict) else None
+    summaries = summaries_enabled() if ev in SUMMARY_EVENTS else True
+    rec = redact(payload, round(time.time(), 3), claude_pid(), paths.plans_dir(), summaries=summaries)
     append_spool(rec)
     if rec.get("ev") == "SessionStart" and os.environ.get("CREW_HUB_NO_DAEMON") != "1" and not daemon_alive():
         spawn_daemon()

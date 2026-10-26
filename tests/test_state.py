@@ -225,5 +225,113 @@ class FoldRulesTest(unittest.TestCase):
         self.assertEqual(cap_snapshot({"machine": {}, "sessions": []}), {"machine": {}, "sessions": []})
 
 
+def _no_internal_keys(testcase, obj, where="snapshot"):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            testcase.assertFalse(str(k).startswith("_"), "%s has internal key %s" % (where, k))
+            _no_internal_keys(testcase, v, "%s.%s" % (where, k))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            _no_internal_keys(testcase, v, "%s[%d]" % (where, i))
+
+
+class PlanPollTest(unittest.TestCase):
+    """Plans from sessions without hooks: picked up from the plans dir alone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.plans = os.path.join(self.tmp.name, "plans")
+        self.sessions = os.path.join(self.tmp.name, "sessions")
+        os.makedirs(self.plans)
+        os.makedirs(self.sessions)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_plan(self, sid, mtime=None, **fields):
+        path = os.path.join(self.plans, sid + ".json")
+        data = {"title": "Plan of " + sid, "phase": "build", "done": 0, "total": 2, "tasks": []}
+        data.update(fields)
+        with open(path, "w") as f:
+            json.dump(data, f)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return path
+
+    def test_new_plan_without_registry_is_idle_session(self):
+        m = Model()
+        self.write_plan("nohooks-1", ccrSessionId="session_zz")
+        m.poll_plans(self.plans, self.sessions)
+        s = m.sessions["nohooks-1"]
+        self.assertEqual((s["status"], s["name"], s["ccr"]), ("idle", "Plan of nohooks-1", "session_zz"))
+        self.assertEqual(s["plan"]["phase"], "build")
+        # liveness checks never end it while the file exists, even a day later
+        m.enrich(sessions_dir=self.sessions, plans_dir=self.plans, now=int(time.time() * 1000) + 3 * 24 * 3600 * 1000)
+        self.assertEqual(m.sessions["nohooks-1"]["status"], "idle")
+        snap = m.snapshot(MACHINE)
+        self.assertEqual([x["id"] for x in snap["sessions"]], ["nohooks-1"])
+        _no_internal_keys(self, snap)
+
+    def test_new_plan_with_live_registry_entry(self):
+        with open(os.path.join(self.sessions, "%d.json" % os.getpid()), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "live-1", "name": "project-ac", "bridgeSessionId": "session_abc",
+                       "status": "busy", "updatedAt": 10, "statusUpdatedAt": 10}, f)
+        with open(os.path.join(self.sessions, "dead.json"), "w") as f:
+            json.dump({"pid": 2 ** 22 + 7, "sessionId": "dead-1", "name": "gone", "status": "busy", "updatedAt": 99}, f)
+        m = Model()
+        self.write_plan("live-1")
+        self.write_plan("dead-1")
+        m.poll_plans(self.plans, self.sessions)
+        s = m.sessions["live-1"]
+        self.assertEqual((s["status"], s["name"], s["ccr"], s["_pid"]), ("working", "project-ac", "session_abc", os.getpid()))
+        d = m.sessions["dead-1"]
+        self.assertEqual((d["status"], d["name"]), ("idle", "Plan of dead-1"))
+        self.assertNotIn("_pid", d)
+        # registry later says idle: followed by enrichment
+        with open(os.path.join(self.sessions, "%d.json" % os.getpid()), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "live-1", "name": "project-ac", "status": "idle",
+                       "updatedAt": 50000, "statusUpdatedAt": 50000}, f)
+        m.enrich(sessions_dir=self.sessions, plans_dir=self.plans)
+        self.assertEqual(m.sessions["live-1"]["status"], "idle")
+        self.assertEqual(m.sessions["dead-1"]["name"], "Plan of dead-1")
+
+    def test_update_by_mtime(self):
+        m = Model()
+        self.write_plan("p1", mtime=1000000, done=0)
+        m.poll_plans(self.plans, self.sessions)
+        self.assertEqual(m.sessions["p1"]["plan"]["done"], 0)
+        m.changed = False
+        m.poll_plans(self.plans, self.sessions)
+        self.assertFalse(m.changed)  # unchanged file: no re-read, no change
+        self.write_plan("p1", mtime=1000005, done=1, title="Renamed plan")
+        m.poll_plans(self.plans, self.sessions)
+        self.assertTrue(m.changed)
+        self.assertEqual((m.sessions["p1"]["plan"]["done"], m.sessions["p1"]["name"]), (1, "Renamed plan"))
+
+    def test_deletion(self):
+        m = Model()
+        p1 = self.write_plan("p1")
+        p2 = self.write_plan("hooked")
+        m.apply({"v": 1, "ts": time.time(), "ev": "UserPromptSubmit", "sid": "hooked"})
+        m.poll_plans(self.plans, self.sessions)
+        self.assertIsNotNone(m.sessions["hooked"]["plan"])
+        os.unlink(p1)
+        os.unlink(p2)
+        m.poll_plans(self.plans, self.sessions)
+        self.assertNotIn("p1", m.sessions)  # plan-only session goes with its file
+        self.assertIsNone(m.sessions["hooked"]["plan"])  # a session with hooks stays, without the plan
+
+    def test_hook_event_turns_plan_session_normal_and_bad_file_ignored(self):
+        m = Model()
+        self.write_plan("p1")
+        with open(os.path.join(self.plans, "bad.json"), "w") as f:
+            f.write("{broken")
+        m.poll_plans(self.plans, self.sessions)
+        self.assertNotIn("bad", m.sessions)
+        m.apply({"v": 1, "ts": time.time(), "ev": "UserPromptSubmit", "sid": "p1"})
+        self.assertNotIn("_fromPlan", m.sessions["p1"])
+        self.assertEqual(m.sessions["p1"]["status"], "working")
+
+
 if __name__ == "__main__":
     unittest.main()

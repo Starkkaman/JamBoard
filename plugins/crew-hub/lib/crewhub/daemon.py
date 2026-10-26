@@ -1,7 +1,7 @@
 """crew-hubd: one per machine. Spool -> state model -> ~/.claude/crew-hub/snapshot.json, plus MQTT when configured.
 
 Loop (every POLL seconds): read new spool lines and fold them; every ENRICH seconds read ~/.claude/sessions/*.json,
-transcript tails and plan files; publish the snapshot when it changed (at most once a second) and at least every 60 s.
+transcript tails and plan files; every PLAN_POLL seconds stat the plans dir (plans from sessions without hooks); publish the snapshot when it changed (at most once a second) and at least every 60 s.
 Commands on crew/<m>/cmd are only logged in this step. Never logs secrets, prompts or command arguments.
 """
 
@@ -19,6 +19,7 @@ from .state import Model, now_ms
 
 POLL = 0.25
 ENRICH = 3.0
+PLAN_POLL = 2.0
 MIN_PUBLISH = 1.0
 HEARTBEAT = 60.0
 SAVE_EVERY = 2.0
@@ -157,7 +158,7 @@ class Daemon(object):
     def __init__(self, log):
         self.log = log
         self.stop = False
-        self.cfg = config.load(log)
+        self.cfg = config.load(log, migrate=True)  # under the pidfile lock: one migration at most
         self.model = Model(self.cfg.ctx_max)
         pos = None
         try:
@@ -174,6 +175,7 @@ class Daemon(object):
         self.last_core = None
         self.last_publish = 0.0
         self.last_enrich = 0.0
+        self.last_plan_poll = 0.0
         self.last_save = 0.0
         self.dirty_state = True
         self.started = now_ms()
@@ -204,6 +206,17 @@ class Daemon(object):
             self.model.enrich(paths.sessions_dir(), paths.plans_dir())
         except Exception as e:
             self.log("enrich error: %s: %s" % (type(e).__name__, e))
+        if self.model.changed:
+            self.dirty_state = True
+
+    def maybe_poll_plans(self, now):
+        if now - self.last_plan_poll < PLAN_POLL:
+            return
+        self.last_plan_poll = now
+        try:
+            self.model.poll_plans(paths.plans_dir(), paths.sessions_dir())
+        except Exception as e:
+            self.log("plan poll error: %s: %s" % (type(e).__name__, e))
         if self.model.changed:
             self.dirty_state = True
 
@@ -246,6 +259,7 @@ class Daemon(object):
             try:
                 self.ingest()
                 self.maybe_enrich(now)
+                self.maybe_poll_plans(now)
                 self.maybe_publish(now, force=first)
                 self.save_state(now)
             except Exception as e:

@@ -89,6 +89,32 @@ class HookEndToEndTest(unittest.TestCase):
         finally:
             os.chmod(self.home, 0o700)
 
+    def _stop_msg(self, config_text):
+        os.makedirs(self.hub, 0o700, exist_ok=True)
+        cfg = os.path.join(self.hub, "config.json")
+        if config_text is None:
+            if os.path.exists(cfg):
+                os.unlink(cfg)
+        else:
+            with open(cfg, "w") as f:
+                f.write(config_text)
+        payload = {"session_id": "s1", "hook_event_name": "Stop",
+                   "last_assistant_message": "Edited /home/node/secret/dir/app.py, see https://h.example.com/x?t=1"}
+        p, elapsed = run_hook(self.home, payload)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"", b""))
+        with open(os.path.join(self.hub, "spool.jsonl")) as f:
+            rec = json.loads(f.read().splitlines()[-1])
+        return rec.get("msg"), elapsed
+
+    def test_summaries_setting(self):
+        self.assertEqual(self._stop_msg(None)[0], "Edited app.py, see h.example.com")  # default on, sanitized
+        self.assertEqual(self._stop_msg("{not json")[0], "Edited app.py, see h.example.com")  # unreadable: on
+        self.assertEqual(self._stop_msg('{"summaries": true}')[0], "Edited app.py, see h.example.com")
+        msg, elapsed = self._stop_msg('{"machineId": "nas", "summaries": false}')
+        self.assertIsNone(msg)
+        self.assertLess(elapsed, 2.0)
+        sys.stderr.write("\n  crew-hook Stop wall time with config read: %.0f ms\n" % (elapsed * 1000))
+
     def test_session_start_spawns_one_detached_daemon(self):
         start = self.payloads[0]
         self.assertEqual(start["hook_event_name"], "SessionStart")

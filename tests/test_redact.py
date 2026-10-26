@@ -188,5 +188,54 @@ class RedactSyntheticTest(unittest.TestCase):
             self.assertEqual(rec["v"], 1)
 
 
+class SummarySanitizeTest(unittest.TestCase):
+    def stop(self, msg, ev="Stop", **kw):
+        return redact({"session_id": "s1", "hook_event_name": ev, "last_assistant_message": msg}, 1000.0, None, None, **kw)
+
+    def test_path_leak(self):
+        r = self.stop("Done: edited /home/node/project/secret-proj/lib/notes.py and ~/.claude/crew-hub/config.json.")
+        self.assertEqual(r["msg"], "Done: edited notes.py and config.json.")
+        for bad in ("/home", "node", "secret-proj", ".claude", "crew-hub/"):
+            self.assertNotIn(bad, r["msg"])
+        # one-segment tokens and ratios are not paths
+        self.assertEqual(self.stop("and/or ~/x 1/2 /tmp")["msg"], "and/or ~/x 1/2 /tmp")
+
+    def test_url_with_query_leak(self):
+        r = self.stop("Fetched https://user:pw@api.example.com:8443/v1/items?token=hunter2&id=9 fine")
+        self.assertEqual(r["msg"], "Fetched api.example.com fine")
+        for bad in ("hunter2", "token", "user", "pw@", "/v1", "8443"):
+            self.assertNotIn(bad, r["msg"])
+
+    def test_token_leak(self):
+        fake = "sk-ant-api03-Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1"
+        r = self.stop("Configured key %s and id 7c1addf5-73c5-41d7-9225-77ba4bbbb2d5 for well-understood-multipart-code" % fake,
+                      ev="SubagentStop")
+        self.assertNotIn("Zx9Qw8", r["msg"])
+        self.assertNotIn("7c1addf5", r["msg"])
+        self.assertIn("well-understood-multipart-code", r["msg"])  # letters only: not token-like
+        self.assertEqual(r["msg"].count("\u2026"), 2)
+
+    def test_email_leak(self):
+        r = self.stop("Sent it to someone.else+tag@mail.example.org today")
+        self.assertEqual(r["msg"], "Sent it to \u2026 today")
+
+    def test_first_line_and_length(self):
+        r = self.stop("Short headline\n/home/node/secret second line https://x.example.com/?k=v")
+        self.assertEqual(r["msg"], "Short headline")
+        r = self.stop("word " * 100)
+        self.assertLessEqual(len(r["msg"]), 120)
+        self.assertTrue(r["msg"].endswith("\u2026"))
+        self.assertNotIn("msg", self.stop("   \n  "))
+        self.assertNotIn("msg", self.stop(42))
+
+    def test_summaries_off(self):
+        for ev in ("Stop", "SubagentStop"):
+            self.assertNotIn("msg", self.stop("all good", ev=ev, summaries=False))
+        # Notification messages are not summaries
+        n = redact({"session_id": "s1", "hook_event_name": "Notification", "message": "Claude is waiting for your input"},
+                   1.0, summaries=False)
+        self.assertEqual(n["msg"], "Claude is waiting for your input")
+
+
 if __name__ == "__main__":
     unittest.main()

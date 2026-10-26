@@ -39,6 +39,10 @@ def config_path():
     return os.path.join(hub_dir(), "config.json")
 
 
+def secrets_path():
+    return os.path.join(hub_dir(), "secrets.json")
+
+
 def sessions_dir():
     return os.path.join(claude_dir(), "sessions")
 

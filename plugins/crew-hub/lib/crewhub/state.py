@@ -2,6 +2,10 @@
 
 Times in the snapshot are epoch milliseconds (ints), like ~/.claude/sessions/*.json. Keys starting with "_" are
 internal (pid, transcript path, file signatures) and are never published.
+
+Sessions without hooks still show up through their plan file (~/.claude/crew-hub/plans/<session id>.json, see
+poll_plans): such a session carries "_fromPlan" until its first hook event, lives exactly as long as the plan file, and
+takes its status from ~/.claude/sessions/*.json while that process is alive (idle otherwise).
 """
 
 import json
@@ -18,6 +22,8 @@ TRANSCRIPT_TAIL = 128 * 1024
 PLAN_MAX_BYTES = 256 * 1024
 
 WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "SubagentStart")
+REGISTRY_STATUS = {"busy": "working", "idle": "idle"}
+SID_MAX = 100
 
 
 def now_ms():
@@ -144,6 +150,31 @@ def read_transcript_usage(path):
     return None, None
 
 
+def find_registry(sessions_dir, sid):
+    """(alive, entry) for the best ~/.claude/sessions/*.json entry of `sid` (live pid first, then newest), or None."""
+    try:
+        names = os.listdir(sessions_dir)
+    except (OSError, TypeError):
+        return None
+    best = None
+    for n in names:
+        if not n.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(sessions_dir, n), "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(d, dict) or d.get("sessionId") != sid:
+            continue
+        pid = d.get("pid")
+        alive = isinstance(pid, int) and pid > 0 and pid_alive(pid)
+        key = (alive, d.get("updatedAt") or 0)
+        if best is None or key > best[0]:
+            best = (key, d)
+    return (best[0][0], best[1]) if best else None
+
+
 def pid_alive(pid):
     try:
         os.kill(pid, 0)
@@ -170,6 +201,7 @@ class Model(object):
         self.sessions = {}
         self.ctx_max = ctx_max or (lambda model: 1000000 if model and ("opus" in model or "fable" in model) else 200000)
         self.changed = True
+        self._bad_plans = {}  # sid -> signature of a plan file that didn't parse (not re-read until it changes)
 
     # ---- persistence -------------------------------------------------------------------------------------------
     def to_dict(self):
@@ -259,6 +291,7 @@ class Model(object):
         at = _ms(rec.get("ts"))
         s = self._session(sid, at)
         self.changed = True
+        s.pop("_fromPlan", None)  # it has hooks after all: normal lifecycle from now on
         if at > (s.get("updatedAt") or 0):
             s["updatedAt"] = at
         if rec.get("cwd") and not rec.get("agent"):
@@ -389,6 +422,8 @@ class Model(object):
             if plan is None:
                 return
             s = self._session(sid, now_ms())
+            s["_fromPlan"] = True
+            s["name"] = plan.get("title") or None
         s["plan"] = plan
         s["_planSig"] = list(sig) if sig else None
         self.changed = True
@@ -402,8 +437,8 @@ class Model(object):
             if s["status"] != "ended":
                 self._enrich_transcript(s)
                 self._check_alive(s, now)
-            if plans_dir:
-                self._refresh_plan(s, plans_dir)
+        if plans_dir:
+            self.poll_plans(plans_dir, sessions_dir, now)
         self.prune(now)
 
     def _enrich_sessions_dir(self, sessions_dir):
@@ -427,6 +462,8 @@ class Model(object):
                 continue
             pid = d.get("pid")
             alive = isinstance(pid, int) and pid > 0 and pid_alive(pid)
+            if not alive and self.sessions[sid].get("_fromPlan"):
+                continue  # plan-only sessions only follow a live registry entry
             key = (alive, d.get("updatedAt") or 0)
             if sid not in best or key > best[sid][0]:
                 best[sid] = (key, d)
@@ -473,6 +510,17 @@ class Model(object):
                 self.changed = True
 
     def _check_alive(self, s, now):
+        if s.get("_fromPlan"):
+            # Lifetime follows the plan file (poll_plans); a dead process just makes it idle again.
+            pid = s.get("_pid")
+            if pid and not pid_alive(pid):
+                s.pop("_pid", None)
+                s.pop("_pidSrc", None)
+                self._set_status(s, "idle", now)
+                if s.get("plan") and s["plan"].get("title"):
+                    s["name"] = s["plan"]["title"]
+                self.changed = True
+            return
         pid = s.get("_pid")
         if not pid and s.get("_hookPid"):
             hp = s["_hookPid"]
@@ -501,6 +549,73 @@ class Model(object):
             s["plan"] = plan
             s["_planSig"] = list(rsig) if rsig else None
             self.changed = True
+
+    def poll_plans(self, plans_dir, sessions_dir=None, now=None):
+        """Cheap pass over the plans dir (listdir + stat; files are read only when their signature changed).
+
+        Known sessions get their plan refreshed; a plan for an unknown session id creates a plan-only session; a
+        plan-only session whose file is gone is removed."""
+        now = now or now_ms()
+        try:
+            names = os.listdir(plans_dir)
+        except (OSError, TypeError):
+            names = []
+        present = {}
+        for n in names:
+            if n.endswith(".json") and 0 < len(n) - 5 <= SID_MAX and not n.startswith("."):
+                present[n[:-5]] = os.path.join(plans_dir, n)
+        for sid in list(self.sessions):
+            s = self.sessions[sid]
+            if s.get("_fromPlan") and sid not in present:
+                del self.sessions[sid]
+                self.changed = True
+                continue
+            before = s.get("_planSig")
+            self._refresh_plan(s, plans_dir)
+            if s.get("_fromPlan") and s.get("_planSig") != before:
+                s["updatedAt"] = max(s.get("updatedAt") or 0, now)
+                if s.get("plan") and s["plan"].get("title") and not s.get("_pid"):
+                    s["name"] = s["plan"]["title"]
+        for sid in list(self._bad_plans):
+            if sid not in present or sid in self.sessions:
+                del self._bad_plans[sid]
+        for sid, path in present.items():
+            if sid in self.sessions:
+                continue
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            sig = [st.st_mtime_ns, st.st_size]
+            if self._bad_plans.get(sid) == sig:
+                continue
+            plan, rsig = read_plan_file(path)
+            if plan is None:
+                self._bad_plans[sid] = sig
+                continue
+            self._session_from_plan(sid, plan, rsig, sessions_dir, now)
+
+    def _session_from_plan(self, sid, plan, sig, sessions_dir, now):
+        s = self._session(sid, now)
+        s["_fromPlan"] = True
+        s["plan"] = plan
+        s["_planSig"] = list(sig) if sig else None
+        s["name"] = plan.get("title") or None
+        s["ccr"] = plan.get("ccrSessionId")
+        reg = find_registry(sessions_dir, sid) if sessions_dir else None
+        if reg and reg[0]:
+            d = reg[1]
+            s["_pid"] = d["pid"]
+            s["_pidSrc"] = "sessions"
+            if isinstance(d.get("name"), str) and d["name"]:
+                s["name"] = d["name"][:200]
+            if isinstance(d.get("bridgeSessionId"), str):
+                s["ccr"] = d["bridgeSessionId"][:100]
+            s["status"] = REGISTRY_STATUS.get(d.get("status"), "idle")
+            fat = d.get("statusUpdatedAt") or d.get("updatedAt")
+            s["_statusAt"] = int(fat) if isinstance(fat, (int, float)) else now
+        self.changed = True
+        return s
 
     def prune(self, now=None):
         now = now or now_ms()

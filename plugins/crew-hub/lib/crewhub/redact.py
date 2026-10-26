@@ -5,9 +5,12 @@ and agent prompts are never copied. Keep this module import-light: it runs on ev
 """
 
 import os
+import re
 
 STEP_MAX = 200
 SUBJECT_MAX = 120
+SUMMARY_MAX = 120
+SUMMARY_SCAN = 4000  # only this much of the first line is examined (bounds the regex cost)
 MAX_TODOS = 30
 
 FILE_TOOLS = ("Read", "Write", "Edit", "NotebookEdit", "MultiEdit")
@@ -49,6 +52,47 @@ def _basename(path):
     if not isinstance(path, str) or not path:
         return None
     return os.path.basename(path.rstrip("/"))[:120] or None
+
+
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"'`]+")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+# A token starting with / or ~/ that has a further / in it. The lookbehind keeps it from starting mid-word or mid-path.
+_PATH_RE = re.compile(r"(?<![A-Za-z0-9_.~/-])(?:~/|/)[^\s/<>\"'`()\[\]{},;]*/[^\s<>\"'`()\[\]{},;]*")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_-]{20,}")
+_HAS_ALPHA = re.compile(r"[A-Za-z]")
+_HAS_DIGIT = re.compile(r"[0-9]")
+
+
+def _url_host(m):
+    return _hostname(m.group(0)) or "\u2026"
+
+
+def _path_base(m):
+    return os.path.basename(m.group(0).rstrip("/")) or "\u2026"
+
+
+def _token(m):
+    t = m.group(0)
+    return "\u2026" if _HAS_ALPHA.search(t) and _HAS_DIGIT.search(t) else t
+
+
+def sanitize_summary(value):
+    """A Stop/SubagentStop message made safe to publish: first line only, URLs -> hostname, e-mail addresses -> "…",
+    absolute/home paths -> basename, token-like runs (20+ chars of [A-Za-z0-9+/=_-] with letters and digits) -> "…",
+    then cut to SUMMARY_MAX. None when nothing is left."""
+    if not isinstance(value, str):
+        return None
+    line = value.strip().split("\n", 1)[0].strip()[:SUMMARY_SCAN]
+    if not line:
+        return None
+    if "://" in line:
+        line = _URL_RE.sub(_url_host, line)
+    if "@" in line:
+        line = _EMAIL_RE.sub("\u2026", line)
+    if "/" in line:
+        line = _PATH_RE.sub(_path_base, line)
+    line = _TOKEN_RE.sub(_token, line)
+    return clip(line, SUMMARY_MAX)
 
 
 def tool_fields(tool, tool_input):
@@ -110,8 +154,10 @@ def plan_path_for(file_path, plans_dir):
     return None
 
 
-def redact(payload, ts, pid=None, plans_dir=None):
-    """Build the spool record for one hook payload. Never raises for odd input shapes."""
+def redact(payload, ts, pid=None, plans_dir=None, summaries=True):
+    """Build the spool record for one hook payload. Never raises for odd input shapes.
+
+    `summaries=False` (config.json "summaries": false) drops the Stop/SubagentStop message entirely."""
     if not isinstance(payload, dict):
         payload = {}
     ev = _str(payload.get("hook_event_name"), 40) or "Unknown"
@@ -186,7 +232,7 @@ def redact(payload, ts, pid=None, plans_dir=None):
         if subj:
             rec["subject"] = subj
     elif ev in ("Stop", "SubagentStop"):
-        msg = clip(payload.get("last_assistant_message"), STEP_MAX)
+        msg = sanitize_summary(payload.get("last_assistant_message")) if summaries else None
         if msg:
             rec["msg"] = msg
     elif ev == "SessionStart":
