@@ -81,10 +81,19 @@ def normalize_public_url(value: Any) -> str | None:
     return f"https://{host}" + (f":{port}" if port is not None else "")
 
 
-def pairing_code(public_url: str, webhook_id: str, secret: str, machine: str) -> str:
-    """crewhub1: + unpadded base64url(JSON {"u", "w", "s", "m"})."""
-    raw = json.dumps({"u": public_url, "w": webhook_id, "s": secret, "m": machine}, separators=(",", ":"))
+def _encode_code(body: dict[str, str]) -> str:
+    raw = json.dumps(body, separators=(",", ":"))
     return PAIRING_PREFIX + base64.urlsafe_b64encode(raw.encode("utf-8")).rstrip(b"=").decode("ascii")
+
+
+def pairing_code(public_url: str, webhook_id: str, secret: str, machine: str) -> str:
+    """Webhook machine: crewhub1: + unpadded base64url(JSON {"t": "webhook", "u", "w", "s", "m"})."""
+    return _encode_code({"t": "webhook", "u": public_url, "w": webhook_id, "s": secret, "m": machine})
+
+
+def mqtt_pairing_code(secret: str, machine: str) -> str:
+    """MQTT machine (new command secret only): crewhub1: + unpadded base64url(JSON {"t": "mqtt", "m", "s"})."""
+    return _encode_code({"t": "mqtt", "m": machine, "s": secret})
 
 
 # ---- verification ----

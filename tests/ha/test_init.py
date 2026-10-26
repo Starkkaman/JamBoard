@@ -14,7 +14,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.crew_hub.const import CARD_URL, DATA_STORE, DOMAIN, VERSION
+from custom_components.crew_hub.const import CARD_URL, DATA_SECRETS, DATA_STORE, DOMAIN, VERSION
 
 SECRET = "s3cret-s3cret-s3cret"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -66,16 +66,18 @@ async def test_options_add_edit_remove_machine(hass: HomeAssistant, mqtt_mock) -
     assert result["menu_options"] == ["add"]
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "add"})
     assert result["step_id"] == "add"
+    # legacy path: a typed secret (collapsed "advanced" section) instead of a pairing code
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"id": "nas", "name": "NAS", "secret": "short"}
+        result["flow_id"], {"id": "nas", "name": "NAS", "advanced": {"secret": "short"}}
     )
-    assert result["errors"] == {"secret": "secret_too_short"}
+    assert result["errors"] == {"base": "secret_too_short"}
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"id": "NAS", "name": "NAS", "secret": SECRET}
+        result["flow_id"], {"id": "NAS", "name": "NAS", "advanced": {"secret": SECRET}}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
-    assert entry.options["machines"] == [{"id": "nas", "name": "NAS", "secret": SECRET}]
+    assert entry.options["machines"] == [{"id": "nas", "name": "NAS", "has_secret": True}]
+    assert hass.data[DATA_SECRETS].secret("nas") == SECRET
     assert hass.states.get("binary_sensor.crew_hub_nas_online") is not None
     assert hass.states.get("binary_sensor.crew_hub_nas_online").state == "unknown"
 
@@ -83,7 +85,7 @@ async def test_options_add_edit_remove_machine(hass: HomeAssistant, mqtt_mock) -
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["menu_options"] == ["add", "edit", "remove"]
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "add"})
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {"id": "nas", "secret": SECRET})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"id": "nas"})
     assert result["errors"] == {"id": "machine_exists"}
 
     # edit: empty secret keeps the old one
@@ -94,7 +96,8 @@ async def test_options_add_edit_remove_machine(hass: HomeAssistant, mqtt_mock) -
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"name": "The NAS"})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
-    assert entry.options["machines"] == [{"id": "nas", "name": "The NAS", "secret": SECRET}]
+    assert entry.options["machines"] == [{"id": "nas", "name": "The NAS", "has_secret": True}]
+    assert hass.data[DATA_SECRETS].secret("nas") == SECRET
 
     # remove: entity and registry entry go away
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -103,6 +106,7 @@ async def test_options_add_edit_remove_machine(hass: HomeAssistant, mqtt_mock) -
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     assert entry.options["machines"] == []
+    assert hass.data[DATA_SECRETS].secret("nas") is None
     assert hass.states.get("binary_sensor.crew_hub_nas_online") is None
     assert er.async_get(hass).async_get("binary_sensor.crew_hub_nas_online") is None
 

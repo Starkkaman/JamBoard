@@ -28,7 +28,7 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.crew_hub import webhook_transport
-from custom_components.crew_hub.const import DATA_PENDING, DATA_STORE, DATA_WEBHOOK, DOMAIN
+from custom_components.crew_hub.const import DATA_PENDING, DATA_SECRETS, DATA_STORE, DATA_WEBHOOK, DOMAIN
 
 SECRET = "s3cret-s3cret-s3cret"
 MAC_SECRET = "mac-secret-mac-secret-mac-secret-0123456789"
@@ -107,7 +107,7 @@ async def test_add_webhook_machine_shows_code_once(hass, mqtt_mock, hass_client_
     assert result["data_schema"].schema == {}
     code = result["description_placeholders"]["code"]
     paired = _decode(code)
-    assert set(paired) == {"u", "w", "s", "m"}
+    assert set(paired) == {"t", "u", "w", "s", "m"} and paired["t"] == "webhook"
     assert paired["u"] == "https://hass.example.com" and paired["m"] == "mac"
     assert len(paired["w"]) == 64 and int(paired["w"], 16) >= 0
     assert len(paired["s"]) >= 40
@@ -116,7 +116,9 @@ async def test_add_webhook_machine_shows_code_once(hass, mqtt_mock, hass_client_
     await hass.async_block_till_done()
     mac = entry.options["machines"][1]
     assert mac == {"id": "mac", "name": "MacBook", "transport": "webhook", "public_url": "https://hass.example.com",
-                   "webhook_id": paired["w"], "secret": paired["s"]}
+                   "has_secret": True}
+    secrets = hass.data[DATA_SECRETS]
+    assert (secrets.webhook_id("mac"), secrets.secret("mac")) == (paired["w"], paired["s"])
     assert paired["w"] in hass.data[WEBHOOK_HANDLERS]
     client = await hass_client_no_auth()
     status, body = await _post(client, _req("hello", {"version": "0.3.0"}, secret=paired["s"]), paired["w"])
@@ -137,8 +139,10 @@ async def test_add_webhook_machine_shows_code_once(hass, mqtt_mock, hass_client_
     shown = json.dumps(result, default=str)
     assert code not in shown and paired["s"] not in shown and paired["w"] not in shown
 
-    # never logged
-    assert code not in caplog.text and paired["s"] not in caplog.text
+    # never logged (the test harness's own storage mock logs whatever it writes; real HA logs only the file path)
+    logged = "\n".join(r.getMessage() for r in caplog.records
+                       if not r.name.startswith("pytest_homeassistant_custom_component"))
+    assert code not in logged and paired["s"] not in logged
     ours = "\n".join(r.getMessage() for r in caplog.records if r.name.startswith("custom_components.crew_hub"))
     assert paired["w"] not in ours
 
@@ -156,8 +160,9 @@ async def test_closed_pairing_dialog_keeps_machine(hass, mqtt_mock) -> None:
     flow.async_abort(result["flow_id"])
     await hass.async_block_till_done()
     assert [m["id"] for m in entry.options["machines"]] == ["mac"]
-    assert entry.options["machines"][0]["webhook_id"] in hass.data[WEBHOOK_HANDLERS]
-    assert code not in json.dumps(dict(entry.options))
+    assert hass.data[DATA_SECRETS].webhook_id("mac") in hass.data[WEBHOOK_HANDLERS]
+    shown = json.dumps(dict(entry.options))
+    assert code not in shown and hass.data[DATA_SECRETS].secret("mac") not in shown
 
 
 async def test_repair_invalidates_old_webhook(hass, mqtt_mock, hass_client_no_auth, nas_snapshot) -> None:
@@ -202,7 +207,9 @@ async def test_edit_without_repair_keeps_credentials(hass, mqtt_mock) -> None:
     result = await flow.async_configure(result["flow_id"], {"name": "Mac", "public_url": "https://h.example.net:8443"})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
-    assert entry.options["machines"][1] == {**MAC, "name": "Mac", "public_url": "https://h.example.net:8443"}
+    assert entry.options["machines"][1] == {"id": "mac", "name": "Mac", "transport": "webhook",
+                                            "public_url": "https://h.example.net:8443", "has_secret": True}
+    assert (hass.data[DATA_SECRETS].webhook_id("mac"), hass.data[DATA_SECRETS].secret("mac")) == (MAC_HOOK, MAC_SECRET)
     assert MAC_HOOK in hass.data[WEBHOOK_HANDLERS]
 
 
@@ -513,7 +520,8 @@ async def test_mqtt_machine_still_works(hass, mqtt_mock, hass_client_no_auth, na
 
 def test_pairing_code_and_url_helpers() -> None:
     code = webhook_transport.pairing_code("https://h.example.com", "ab" * 32, "s-_x", "mac")
-    assert _decode(code) == {"u": "https://h.example.com", "w": "ab" * 32, "s": "s-_x", "m": "mac"}
+    assert _decode(code) == {"t": "webhook", "u": "https://h.example.com", "w": "ab" * 32, "s": "s-_x", "m": "mac"}
+    assert _decode(webhook_transport.mqtt_pairing_code("s-_x", "nas")) == {"t": "mqtt", "m": "nas", "s": "s-_x"}
     norm = webhook_transport.normalize_public_url
     assert norm("https://H.example.com/") == "https://h.example.com"
     assert norm(" https://h.example.com:8443 ") == "https://h.example.com:8443"

@@ -6,6 +6,7 @@ docs/DESIGN.md §1: each machine's crew-hubd publishes <prefix>/<machine>/snapsh
 (commands.py, docs/COMMANDS.md) through crew_hub/command or the crew_hub.* services; acks arrive on <prefix>/+/ack.
 Machines off the LAN use the webhook transport instead (webhook_transport.py, docs/WEBHOOK.md): one HA webhook per
 machine feeds the same store, and their commands wait in a queue for the machine's poll.
+Machine secrets (command secret, webhook id) live in a private Store, not in the config entry (secret_store.py).
 """
 
 from __future__ import annotations
@@ -27,18 +28,16 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from . import commands, services, websocket
+from . import commands, secret_store, services, websocket
 from .const import (
     CARD_FILENAME,
     CARD_URL,
     CONF_MACHINE_ID,
     CONF_MACHINE_NAME,
-    CONF_MACHINE_SECRET,
     CONF_MACHINE_TRANSPORT,
-    CONF_MACHINE_WEBHOOK_ID,
-    CONF_MACHINES,
     CONF_PREFIX,
     DATA_FRONTEND,
+    DATA_SECRETS,
     DATA_STORE,
     DATA_WEBHOOK,
     DEFAULT_PREFIX,
@@ -68,12 +67,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> bool:
-    """Subscribe to the machines' MQTT topics and start the entities."""
+    """Move secrets out of the options (once), subscribe to the machines' MQTT topics and start the entities."""
+    # First, so secrets leave the options even when MQTT isn't up yet. Runs before the update listener is added.
+    machines = await secret_store.async_migrate_entry(hass, entry)
+    secrets = await secret_store.async_get_secrets(hass)
     if not await mqtt.async_wait_for_mqtt_client(hass):
         raise ConfigEntryNotReady("MQTT is not available")
 
     prefix = entry.data.get(CONF_PREFIX, DEFAULT_PREFIX)
-    machines = entry.options.get(CONF_MACHINES, [])
     # The store outlives reloads (options changes) so open websocket subscriptions keep their feed.
     store: CrewStore | None = hass.data.get(DATA_STORE)
     if store is None:
@@ -85,18 +86,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
 
     # Webhook machines (docs/WEBHOOK.md): one webhook each; MQTT traffic under their ids is ignored.
     hooked = [
-        m for m in machines
-        if isinstance(m, dict) and m.get(CONF_MACHINE_TRANSPORT) == TRANSPORT_WEBHOOK
-        and m.get(CONF_MACHINE_ID) and m.get(CONF_MACHINE_WEBHOOK_ID) and m.get(CONF_MACHINE_SECRET)
+        (m, secrets.webhook_id(m[CONF_MACHINE_ID]), secrets.secret(m[CONF_MACHINE_ID]))
+        for m in machines
+        if m.get(CONF_MACHINE_TRANSPORT) == TRANSPORT_WEBHOOK and isinstance(m.get(CONF_MACHINE_ID), str)
     ]
+    hooked = [(m, wid, secret) for m, wid, secret in hooked if wid and secret]
     hub: WebhookHub | None = hass.data.get(DATA_WEBHOOK)
     if hub is None or hub.store is not store:
         hub = hass.data[DATA_WEBHOOK] = WebhookHub(hass, store)
-    hub.set_machines([(m[CONF_MACHINE_ID], m[CONF_MACHINE_WEBHOOK_ID], m[CONF_MACHINE_SECRET]) for m in hooked])
+    hub.set_machines([(m[CONF_MACHINE_ID], wid, secret) for m, wid, secret in hooked])
     entry.async_on_unload(hub.suspend)
-    for m in hooked:
-        _register_webhook(hass, entry, hub, m)
-    webhook_ids = {m[CONF_MACHINE_ID] for m in hooked}
+    for m, wid, _secret in hooked:
+        _register_webhook(hass, entry, hub, m, wid)
+    webhook_ids = {m[CONF_MACHINE_ID] for m, _wid, _secret in hooked}
     head = prefix + "/"
 
     def _from_webhook_machine(topic: str) -> bool:
@@ -126,8 +128,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
     return True
 
 
-def _register_webhook(hass: HomeAssistant, entry: CrewHubConfigEntry, hub: WebhookHub, machine: dict) -> None:
-    mid, webhook_id = machine[CONF_MACHINE_ID], machine[CONF_MACHINE_WEBHOOK_ID]
+def _register_webhook(hass: HomeAssistant, entry: CrewHubConfigEntry, hub: WebhookHub, machine: dict,
+                      webhook_id: str) -> None:
+    mid = machine[CONF_MACHINE_ID]
 
     async def _handle(hass: HomeAssistant, _webhook_id: str, request: web.Request) -> web.Response:
         return await hub.async_handle(mid, request)
@@ -150,8 +153,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> 
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> None:
-    """Entry deleted: drop the store and the card's Lovelace resource (unload alone keeps the resource)."""
+    """Entry deleted: drop the store, the secrets file and the card's Lovelace resource (unload keeps them)."""
     await _async_remove_resource(hass)
+    secrets = await secret_store.async_get_secrets(hass)
+    await secrets.async_remove_file()
+    hass.data.pop(DATA_SECRETS, None)
     if (hub := hass.data.pop(DATA_WEBHOOK, None)) is not None:
         hub.shutdown()
     if (store := hass.data.pop(DATA_STORE, None)) is not None:

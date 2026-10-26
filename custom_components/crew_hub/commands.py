@@ -27,10 +27,10 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     CONF_MACHINE_ID,
-    CONF_MACHINE_SECRET,
     CONF_MACHINE_TRANSPORT,
     CONF_MACHINES,
     DATA_PENDING,
+    DATA_SECRETS,
     DATA_STORE,
     DATA_WEBHOOK,
     DOMAIN,
@@ -242,12 +242,16 @@ def _ack_result(ack: dict) -> dict:
 
 
 # ---- send ----
-def _machine_config(hass: HomeAssistant, machine: str) -> dict | None:
-    """The machine's options entry when it has a command secret."""
+def _machine_config(hass: HomeAssistant, machine: str) -> tuple[dict, str] | None:
+    """(the machine's options entry, its command secret from secret_store.py) when it has a secret."""
+    secrets = hass.data.get(DATA_SECRETS)
+    secret = secrets.secret(machine) if secrets is not None else None
+    if not secret:
+        return None
     for entry in hass.config_entries.async_entries(DOMAIN):
         for m in entry.options.get(CONF_MACHINES, []):
-            if isinstance(m, dict) and m.get(CONF_MACHINE_ID) == machine and m.get(CONF_MACHINE_SECRET):
-                return m
+            if isinstance(m, dict) and m.get(CONF_MACHINE_ID) == machine:
+                return m, secret
     return None
 
 
@@ -258,8 +262,8 @@ async def async_send_command(hass: HomeAssistant, machine: Any, action: Any, arg
     if store is None or not store.active:
         return {"ok": False, "error": "not_loaded"}
     machine = str(machine) if isinstance(machine, str) else ""
-    config = _machine_config(hass, machine) if machine else None
-    secret = str(config[CONF_MACHINE_SECRET]) if config else None
+    found = _machine_config(hass, machine) if machine else None
+    config, secret = found if found else (None, None)
     if not secret or machine not in store.configured:
         _LOGGER.info("Crew Hub command %s for %s refused: not_configured", action, machine or "?")
         return {"ok": False, "error": "not_configured"}

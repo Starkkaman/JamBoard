@@ -18,9 +18,22 @@ WID = "c" * 32 + "0123456789abcdef0123456789abcdef"
 SECRET = "pairing-Secret_value-9876543210-QWERTY"
 
 
-def make_code(u, w=WID, s=SECRET, m="mac", prefix="crewhub1:"):
-    raw = json.dumps({"u": u, "w": w, "s": s, "m": m}).encode("utf-8")
+NEW_SECRET = "rotated-Command_secret-0123456789-abcdefXYZ"
+MQTT_PW = "mqtt-PASSWORD-kept-555"
+
+
+def encode(body, prefix="crewhub1:"):
+    raw = json.dumps(body).encode("utf-8")
     return prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def make_code(u, w=WID, s=SECRET, m="mac", prefix="crewhub1:", **extra):
+    return encode(dict({"u": u, "w": w, "s": s, "m": m}, **extra), prefix)
+
+
+def make_mqtt_code(s=NEW_SECRET, m="nas"):
+    """What Home Assistant 0.3.1 shows for an MQTT machine (WEBHOOK.md "Pairing")."""
+    return encode({"t": "mqtt", "m": m, "s": s})
 
 
 def read_text(path):
@@ -115,6 +128,147 @@ class PairTest(unittest.TestCase):
             os.environ.pop(config.TEST_HTTP_ENV, None)
         self.assertEqual((c.webhook["id"], c.webhook["port"], c.commands.active), (WID, self.hub.port, True))
 
+    def test_typed_webhook_code(self):
+        """0.3.1 webhook codes carry "t": "webhook"; codes without "t" (0.3.0) are webhook codes too (above)."""
+        rc, out, err = self.run_pair(make_code(self.hub.url, t="webhook") + "\n", "--no-daemon")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("paired as mac with 127.0.0.1", out)
+        self.assertEqual(self.read("secrets.json"), {"webhookId": WID, "commandSecret": SECRET})
+
+    # ---- "t": "mqtt" codes: a new command secret for a machine already on MQTT ----
+    def write_mqtt_setup(self, machine="nas", port=1883, commands=True, transport="mqtt"):
+        os.makedirs(self.hub_dir, 0o700)
+        cfg = {"machineId": machine, "machineName": "NAS", "prefix": "crew", "summaries": True,
+               "mqtt": {"host": "127.0.0.1", "port": port, "username": "crew-nas"},
+               "commands": {"enabled": commands, "folders": {"project": {"path": "/srv/project", "label": "Projects"}},
+                            "holdSeconds": 30}}
+        if transport:
+            cfg["transport"] = transport
+        with open(os.path.join(self.hub_dir, "config.json"), "w") as f:
+            json.dump(cfg, f, indent=2)
+        os.chmod(os.path.join(self.hub_dir, "config.json"), 0o600)
+        with open(os.path.join(self.hub_dir, "secrets.json"), "w") as f:
+            json.dump({"mqttPassword": MQTT_PW, "commandSecret": SECRET, "extra": 1}, f)
+        os.chmod(os.path.join(self.hub_dir, "secrets.json"), 0o600)
+
+    def raw(self, name):
+        with open(os.path.join(self.hub_dir, name), "rb") as f:
+            return f.read()
+
+    def test_mqtt_code_replaces_only_the_command_secret(self):
+        self.write_mqtt_setup()
+        cfg_before = self.raw("config.json")
+        code = make_mqtt_code()
+        rc, out, err = self.run_pair(code + "\n", "--no-daemon")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("new command secret installed for nas", out)
+        self.assert_no_echo(out + err, code, NEW_SECRET, SECRET, MQTT_PW, code[9:40])
+        self.assertEqual(self.raw("config.json"), cfg_before)  # MQTT login, machine id, commands: untouched
+        self.assertEqual(self.read("secrets.json"), {"mqttPassword": MQTT_PW, "commandSecret": NEW_SECRET, "extra": 1})
+        self.assertEqual((self.mode(), self.mode("secrets.json")), (0o700, 0o600))
+        self.assertEqual(sorted(os.listdir(self.hub_dir)), ["config.json", "secrets.json"])  # no temp files
+        self.assertEqual(self.hub.requests, [])  # no network for an MQTT code
+        # what crew-hubd will load: same broker login, the new secret signs commands
+        env_old = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        try:
+            c = config.load()
+        finally:
+            os.environ["HOME"] = env_old
+        self.assertEqual((c.transport, c.machine_id, c.mqtt["password"], c.mqtt["username"]),
+                         ("mqtt", "nas", MQTT_PW, "crew-nas"))
+        self.assertEqual(c.command_secret, NEW_SECRET)
+        self.assertTrue(c.commands.active)
+
+    def test_mqtt_code_without_transport_key(self):
+        """Configs from before 0.3.0 have no "transport" (= mqtt)."""
+        self.write_mqtt_setup(transport=None)
+        rc, out, err = self.run_pair(make_mqtt_code() + "\n", "--no-daemon")
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(self.read("secrets.json")["commandSecret"], NEW_SECRET)
+
+    def test_mqtt_code_with_commands_off_says_so(self):
+        self.write_mqtt_setup(commands=False)
+        rc, out, err = self.run_pair(make_mqtt_code() + "\n", "--no-daemon")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("commands are off on this machine", out)
+        self.assertFalse(self.read("config.json")["commands"]["enabled"])  # not switched on behind the person's back
+        self.assertEqual(self.read("secrets.json")["commandSecret"], NEW_SECRET)
+
+    def test_mqtt_code_refused_unless_already_mqtt_for_that_machine(self):
+        code = make_mqtt_code()
+        # nothing set up yet
+        rc, out, err = self.run_pair(code + "\n", "--no-daemon")
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("isn't set up for MQTT yet", err)
+        self.assertIn("crew-hub-pair --mqtt", err)
+        self.assertFalse(os.path.exists(os.path.join(self.hub_dir, "secrets.json")))
+        self.assert_no_echo(out + err, code, NEW_SECRET)
+
+        cases = [
+            (dict(machine="pc"), "this code is for machine nas, but this machine is set up as pc"),
+            (dict(transport="webhook"), "uses the webhook transport"),
+        ]
+        for setup, msg in cases:
+            self.tmp.cleanup()
+            os.makedirs(self.home, exist_ok=True)
+            self.write_mqtt_setup(**setup)
+            before = (self.raw("config.json"), self.raw("secrets.json"))
+            rc, out, err = self.run_pair(code + "\n", "--no-daemon")
+            self.assertEqual(rc, 2, (setup, out, err))
+            self.assertIn(msg, err)
+            self.assertEqual((self.raw("config.json"), self.raw("secrets.json")), before)
+            self.assert_no_echo(out + err, code, NEW_SECRET, SECRET, MQTT_PW)
+
+        # an mqtt config without a broker host
+        self.tmp.cleanup()
+        os.makedirs(self.hub_dir)
+        with open(os.path.join(self.hub_dir, "config.json"), "w") as f:
+            json.dump({"machineId": "nas", "transport": "mqtt"}, f)
+        rc, out, err = self.run_pair(code + "\n", "--no-daemon")
+        self.assertEqual(rc, 2, out + err)
+        self.assertIn("no broker in config.json", err)
+        self.assertFalse(os.path.exists(os.path.join(self.hub_dir, "secrets.json")))
+
+    def test_mqtt_code_restarts_the_daemon_with_the_new_secret(self):
+        from crewhub import mqtt
+
+        broker = _util.FakeBroker()
+        try:
+            self.write_mqtt_setup(port=broker.port)
+            env = dict(os.environ, HOME=self.home)
+            old = subprocess.Popen([_util.DAEMON], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.daemon_pids.append(old.pid)
+            self.addCleanup(old.wait, 10)  # reaped even when an assertion fails (tearDown kills it first)
+            pidfile = os.path.join(self.hub_dir, "crew-hubd.pid")
+            self.assertTrue(wait(lambda: read_text(pidfile).strip() == str(old.pid)))
+            self.assertTrue(wait(lambda: len(broker.connects) >= 1 and broker.subscribes))
+            # from now on every (re)subscribe gets one command signed with the new and one with the old secret
+            new_env = json.dumps(_util.command_envelope(NEW_SECRET, "send", {"session": "no-such-session", "text": "x"}))
+            old_env = json.dumps(_util.command_envelope(SECRET, "send", {"session": "no-such-session", "text": "y"}))
+            broker.to_client = [mqtt.build_publish("crew/nas/cmd", new_env, qos=1, packet_id=7),
+                                mqtt.build_publish("crew/nas/cmd", old_env, qos=1, packet_id=8)]
+            rc, out, err = self.run_pair(make_mqtt_code() + "\n")
+            self.assertEqual(rc, 0, out + err)
+            self.assertIn("new command secret installed for nas", out)
+            self.assertIn("crew-hubd restarted", out)
+            self.assertEqual(old.wait(timeout=10), 0)
+            new_pid = int(read_text(pidfile).strip())
+            self.daemon_pids.append(new_pid)
+            self.assertNotEqual(new_pid, old.pid)
+            new_id, old_id = json.loads(new_env)["id"], json.loads(old_env)["id"]
+            acks = lambda: [json.loads(p[1]) for p in broker.publishes if p[0] == "crew/nas/ack"]
+            self.assertTrue(wait(lambda: any(a["id"] == new_id for a in acks()), 10))
+            time.sleep(0.5)
+            # the restarted daemon verifies with the new secret; the old secret's command is dropped (no ack)
+            self.assertEqual([a["id"] for a in acks()], [new_id])
+            self.assertTrue(len(broker.connects) >= 2)
+            os.kill(new_pid, signal.SIGTERM)
+            self.assertTrue(wait(lambda: not os.path.exists(pidfile), 10))
+            self.assert_no_echo(read_text(os.path.join(self.hub_dir, "crew-hubd.log")), NEW_SECRET, SECRET, MQTT_PW)
+        finally:
+            broker.close()
+
     def test_default_name_is_the_hostname(self):
         rc, out, err = self.run_pair(make_code(self.hub.url) + "\n", "--no-daemon")
         self.assertEqual(rc, 0, out + err)
@@ -135,6 +289,10 @@ class PairTest(unittest.TestCase):
             (make_code(self.hub.url, m="Mac Book"), "machine id"),
             (make_code(self.hub.url, w="../../etc"), "webhook id"),
             (make_code("http://hass.example.com"), "must start with https://"),
+            (make_code(self.hub.url, t="carrier-pigeon"), "unknown to this crew-hub-pair"),
+            (make_mqtt_code(s="short"), "too short"),
+            (make_mqtt_code(m="NAS!"), "machine id"),
+            (encode({"t": "mqtt", "s": SECRET}), "incomplete"),
         ]
         for code, msg in cases:
             rc, out, err = self.run_pair(code + "\n", "--no-daemon")

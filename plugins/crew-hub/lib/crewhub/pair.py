@@ -1,8 +1,11 @@
 """crew-hub-pair: set this machine up for Crew Hub. Run by a person in their own terminal, never through Claude.
 
-Webhook (roaming machines, docs/WEBHOOK.md): reads the pairing code from Home Assistant (hidden input), writes
-config.json (transport webhook, webhook.url, machineId, machineName, commands) and secrets.json (webhookId,
-commandSecret), sends one signed hello, then restarts crew-hubd.
+Pairing code (hidden input; docs/WEBHOOK.md "Pairing"). Its "t" says which kind (no "t": webhook, codes from 0.3.0):
+- "webhook" (roaming machines): writes config.json (transport webhook, webhook.url, machineId, machineName, commands)
+  and secrets.json (webhookId, commandSecret), sends one signed hello, then restarts crew-hubd.
+- "mqtt" (new command secret for a LAN machine, 0.3.1): replaces only secrets.json commandSecret, keeping the MQTT
+  login and every other setting. The machine must already be on MQTT with the code's machine id (else nothing is
+  written and the problem is explained). Then restarts crew-hubd.
 
 --mqtt (LAN machines): asks for the broker host, port, username, password (hidden), machine id and command secret
 (hidden), writes the same two files with transport mqtt, then restarts crew-hubd.
@@ -24,6 +27,8 @@ import time
 from . import VERSION, config, paths
 
 CODE_PREFIX = "crewhub1:"
+KIND_WEBHOOK = "webhook"
+KIND_MQTT = "mqtt"
 CODE_MAX = 4096
 MACHINE_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 SECRET_MIN = 16
@@ -62,7 +67,9 @@ class Prompter(object):
 
 # ---- pairing code ------------------------------------------------------------------------------------------------
 def parse_code(code):
-    """{"u", "w", "s", "m"} from a crewhub1: code, plus "target" (parsed URL). PairError on anything off."""
+    """From a crewhub1: code: {"t": "webhook", "u", "w", "s", "m", "target" (parsed URL)} or {"t": "mqtt", "s", "m"}.
+
+    A code without "t" is a webhook code (Home Assistant 0.3.0). PairError on anything off."""
     code = (code or "").strip()
     if not code.startswith(CODE_PREFIX):
         raise PairError("that is not a Crew Hub pairing code (it starts with %s)" % CODE_PREFIX)
@@ -77,20 +84,25 @@ def parse_code(code):
         raise PairError("the pairing code is damaged (copy it again)")
     if not isinstance(data, dict):
         raise PairError("the pairing code is damaged (copy it again)")
-    for key in ("u", "w", "s", "m"):
+    kind = data.get("t", KIND_WEBHOOK)
+    if kind not in (KIND_WEBHOOK, KIND_MQTT):
+        raise PairError("this kind of pairing code is unknown to this crew-hub-pair (update the Crew Hub plugin)")
+    for key in (("s", "m") if kind == KIND_MQTT else ("u", "w", "s", "m")):
         if not isinstance(data.get(key), str) or not data[key]:
             raise PairError("the pairing code is incomplete (copy it again)")
+    if len(data["s"]) < SECRET_MIN:
+        raise PairError("the secret in the code is too short")
+    if not MACHINE_RE.match(data["m"]):
+        raise PairError("the machine id in the code is unusable")
+    if kind == KIND_MQTT:
+        return {"t": KIND_MQTT, "s": data["s"], "m": data["m"]}
     try:
         target = config.parse_webhook_url(data["u"])
     except ValueError as e:
         raise PairError("the Home Assistant URL in the code is unusable: %s" % e)
     if not config.WEBHOOK_ID_RE.match(data["w"]):
         raise PairError("the webhook id in the code is unusable")
-    if len(data["s"]) < SECRET_MIN:
-        raise PairError("the secret in the code is too short")
-    if not MACHINE_RE.match(data["m"]):
-        raise PairError("the machine id in the code is unusable")
-    return {"u": data["u"], "w": data["w"], "s": data["s"], "m": data["m"], "target": target}
+    return {"t": KIND_WEBHOOK, "u": data["u"], "w": data["w"], "s": data["s"], "m": data["m"], "target": target}
 
 
 # ---- files -------------------------------------------------------------------------------------------------------
@@ -213,9 +225,42 @@ def restart_daemon(out):
 
 
 # ---- flows -------------------------------------------------------------------------------------------------------
-def pair_webhook(args, prompter, out):
+def pair_code(args, prompter, out):
     code = prompter.secret("Pairing code from Home Assistant")
     info = parse_code(code)
+    if info["t"] == KIND_MQTT:
+        return pair_mqtt_code(info, out)
+    return pair_webhook(args, info, out)
+
+
+def pair_mqtt_code(info, out):
+    """Install the code's command secret on a machine that is already set up for MQTT as the code's machine id."""
+    existing = _read(paths.config_path(), "config.json")
+    again = "then run crew-hub-pair again with the same code"
+    if existing.get("transport") == "webhook":
+        raise PairError("this code is for an MQTT machine, but this machine uses the webhook transport. Make a webhook "
+                        "pairing code in Home Assistant instead, or switch this machine to MQTT with "
+                        "crew-hub-pair --mqtt first (%s)" % again)
+    current = config.Config(existing, {})
+    if current.mqtt is None:
+        raise PairError("this machine isn't set up for MQTT yet (no broker in config.json). Run crew-hub-pair --mqtt "
+                        "first (leave its command secret empty), %s" % again)
+    if current.machine_id != info["m"]:
+        raise PairError("this code is for machine %s, but this machine is set up as %s. Use the code of the matching "
+                        "machine in Home Assistant, or change the machine id with crew-hub-pair --mqtt first"
+                        % (info["m"], current.machine_id))
+    _ensure_dir()
+    secrets = _read(paths.secrets_path(), "secrets.json")
+    secrets["commandSecret"] = info["s"]
+    config._write_private(paths.secrets_path(), secrets)
+    out("new command secret installed for %s" % info["m"])
+    if not current.commands.enabled:
+        out('commands are off on this machine: set "commands": {"enabled": true} in %s to use them'
+            % paths.config_path())
+    return True
+
+
+def pair_webhook(args, info, out):
     existing = _read(paths.config_path(), "config.json")
     name = args.name or existing.get("machineName") or default_name()
     write_files(
@@ -306,7 +351,7 @@ def main(argv=None):
 
     prompter = Prompter(args.stdin)
     try:
-        ok = (pair_mqtt if args.mqtt else pair_webhook)(args, prompter, out)
+        ok = (pair_mqtt if args.mqtt else pair_code)(args, prompter, out)
     except PairError as e:
         sys.stderr.write("crew-hub-pair: %s\n" % e)
         return 2

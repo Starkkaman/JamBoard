@@ -36,14 +36,24 @@
           "id": "Machine id",
           "name": "Display name",
           "transport": "Transport",
-          "secret": "Command secret",
           "public_url": "Public Home Assistant URL"
         },
         "data_description": {
           "id": "The machineId from the machine's crew-hub config (for example nas).",
           "transport": "MQTT for machines on the home network; webhook for machines that roam (they reach Home Assistant through its public URL).",
-          "secret": "MQTT machines only: the same command secret as on the machine (at least 16 characters). Webhook machines get a generated secret.",
           "public_url": "Webhook machines only: the https:// address Home Assistant is reachable at from outside, without a path (for example https://hass.example.com)."
+        },
+        "description": "Home Assistant makes the machine's secret and shows it once, as a pairing code, in the next step.",
+        "sections": {
+          "advanced": {
+            "name": "Advanced",
+            "data": {
+              "secret": "Command secret (optional)"
+            },
+            "data_description": {
+              "secret": "MQTT machines only, legacy: type the machine's existing command secret (at least 16 characters) instead of getting a pairing code. Leave empty to have one made. Ignored for webhook machines."
+            }
+          }
         }
       },
       "pair": {
@@ -60,10 +70,21 @@
         "title": "Edit {machine}",
         "data": {
           "name": "Display name",
-          "secret": "New command secret"
+          "repair": "Re-pair (new secret)"
         },
         "data_description": {
-          "secret": "Leave empty to keep the current secret."
+          "repair": "Make a new command secret and show it once as a pairing code. The old secret stops working at once."
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced",
+            "data": {
+              "secret": "New command secret (optional)"
+            },
+            "data_description": {
+              "secret": "Legacy: type a new command secret yourself (at least 16 characters) instead of re-pairing. Leave empty to keep the current secret."
+            }
+          }
         }
       },
       "edit_webhook": {
@@ -83,6 +104,10 @@
         "data": {
           "id": "Machine"
         }
+      },
+      "pair_mqtt": {
+        "title": "Pair {machine}",
+        "description": "This pairing code is shown only once. On {machine}, run `crew-hub-pair` in your own terminal and paste it when asked (the input is hidden):\n\n`{code}`\n\nIt installs the new command secret and keeps the machine's MQTT settings; set the machine up for MQTT first (`crew-hub-pair --mqtt`) if it isn't yet. Until then, the machine refuses commands (an old secret no longer matches). The code holds the secret, so don't share it or paste it into a chat. The machine is already saved; if you lose the code, re-pair it from Edit a machine."
       }
     },
     "error": {
@@ -90,7 +115,8 @@
       "machine_exists": "A machine with this id already exists.",
       "secret_too_short": "The secret must be at least 16 characters.",
       "invalid_transport": "Choose MQTT or webhook.",
-      "invalid_public_url": "Enter an https:// address without a path, for example https://hass.example.com."
+      "invalid_public_url": "Enter an https:// address without a path, for example https://hass.example.com.",
+      "secret_and_repair": "Either re-pair or type a new secret, not both."
     },
     "abort": {
       "unknown_machine": "That machine no longer exists."

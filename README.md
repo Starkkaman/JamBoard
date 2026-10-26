@@ -17,8 +17,9 @@ Tested with Home Assistant 2026.10.4.
 2. Restart Home Assistant.
 3. Settings → Devices & services → Add integration → **Crew Hub**. Keep the MQTT prefix `crew` unless the machines'
    `~/.claude/crew-hub/config.json` uses another `prefix`.
-4. Crew Hub → Configure → **Add a machine** for each machine: its `machineId` (for example `nas`), a display name and
-   its command secret (at least 16 characters; kept in Home Assistant's config entry, never shown again).
+4. Crew Hub → Configure → **Add a machine** for each machine: its `machineId` (for example `nas`) and a display name.
+   Home Assistant makes the command secret and shows it **once** as a pairing code; see
+   [Pairing MQTT machines](#pairing-mqtt-machines-and-rotating-secrets).
    Machines that publish but aren't added still show on the card, marked "unconfigured".
    Machines that leave the home network use the webhook transport instead (see
    [Roaming machines (webhook)](#roaming-machines-webhook)).
@@ -38,6 +39,36 @@ Entities (device "Crew Hub"): `sensor.crew_hub_working` (sessions working on onl
 `binary_sensor.crew_hub_needs_me` (a session is waiting; attribute `sessions` lists up to 5 names, not recorded) and
 `binary_sensor.crew_hub_<machine>_online` per added machine.
 
+## Pairing MQTT machines and rotating secrets
+
+Since 0.3.1 Home Assistant keeps every machine's secrets (the command secret, and a webhook machine's webhook id) in a
+private file, `.storage/crew_hub.secrets` (mode 0600), not in the config entry. The entry's options only say
+`"has_secret": true`, so nothing that reads config entries (the config-entry REST/websocket API, ha-mcp, backups of
+`core.config_entries`) sees a secret. An entry from 0.3.0 or earlier is moved over by itself on the first start
+after the update; the machines keep their secrets and nothing has to be paired again. Diagnostics
+(Download diagnostics) never include the secrets file, and redact secrets, webhook ids, signatures and URL paths.
+
+**Pairing an MQTT machine**
+
+1. On the machine, set up MQTT once: `crew-hub-pair --mqtt` asks for the broker host, port, user, password and machine
+   id (leave the command secret empty). Already done on machines that report to Crew Hub over MQTT.
+2. Crew Hub → Configure → **Add a machine**: the `machineId`, a display name, transport **MQTT**. The next step shows a
+   **pairing code** (`crewhub1:…`) **once**. The machine is saved as soon as the code shows; submit the dialog when
+   done.
+3. On the machine, run `crew-hub-pair` in your own terminal (not through Claude) and paste the code when asked (hidden
+   input). It replaces only `commandSecret` in `secrets.json` (the MQTT login and every other setting stay), prints
+   `new command secret installed for <id>` and restarts crew-hubd. It refuses (and writes nothing) when the machine
+   isn't on MQTT yet, uses the webhook transport, or has another machine id than the code.
+
+Legacy path: under **Advanced** you can still type a secret yourself (at least 16 characters) instead of getting a
+code; then put the same value into the machine's `secrets.json` `commandSecret` by hand.
+
+**Rotating a secret** (lost code, leaked secret, or routine): Crew Hub → Configure → **Edit a machine** → tick
+**Re-pair (new secret)** (webhook machines: **Re-pair**). A new code is shown once, and the old secret stops working
+at once: until you run `crew-hub-pair` with the new code on the machine, its commands get no answer ("No answer from
+the machine"; the machine drops commands with a signature it doesn't know). Removing a machine also deletes its
+secrets; deleting the integration deletes the secrets file.
+
 ## Roaming machines (webhook)
 
 A machine that isn't always on the home network (a laptop) can't reach the MQTT broker, which stays LAN-only. It talks
@@ -47,8 +78,8 @@ to Home Assistant over HTTPS instead, through the same public address you use fo
 **Pairing**
 
 1. Crew Hub → Configure → **Add a machine**: the `machineId`, a display name, transport **Webhook**, and the public
-   Home Assistant URL (`https://…`, no path, for example `https://hass.example.com`). Leave the command secret empty:
-   Home Assistant generates the webhook id and the secret.
+   Home Assistant URL (`https://…`, no path, for example `https://hass.example.com`). Home Assistant generates the
+   webhook id and the secret (a secret typed under **Advanced** is ignored for webhook machines).
 2. The next step shows a **pairing code** (`crewhub1:…`) **once**. On the machine, run `crew-hub-pair` in your own
    terminal (not through Claude) and paste the code when asked; the input is hidden. It saves the settings, sends a
    test request and restarts crew-hubd. The machine is saved in Home Assistant as soon as the code shows, so the test
@@ -88,7 +119,9 @@ to Home Assistant over HTTPS instead, through the same public address you use fo
   error (`HTTP 401`, `unknown webhook`: make a new code), and restarts crew-hubd (or starts it). The settings stay
   saved when the hello fails; crew-hubd keeps retrying.
 - LAN machines can use the same tool for MQTT: `crew-hub-pair --mqtt` asks for the broker host, port, user, password,
-  machine id and command secret (hidden input) and writes the two files with `"transport": "mqtt"`.
+  machine id and command secret (hidden input) and writes the two files with `"transport": "mqtt"`. A pairing code
+  for an MQTT machine (`crew-hub-pair`, then paste) installs only a new `commandSecret` (plugin 0.3.1+, see
+  [Pairing MQTT machines](#pairing-mqtt-machines-and-rotating-secrets)).
 - crew-hubd then posts `hello` at start, the snapshot on every change (at most once a second) and at least every 60 s,
   and command acks; one poll is always open (35 s socket timeout). Commands from a poll go through the same checks as
   over MQTT (signature, 60 s window, replay, allowlists). On errors it backs off up to 60 s and keeps only the latest
@@ -127,8 +160,8 @@ secret, the signature or the text.
 
 Commands are off until both of these are set on the machine (then restart crew-hubd):
 
-- `~/.claude/crew-hub/secrets.json` (mode 0600): `"commandSecret": "<the same secret you typed into Crew Hub>"`
-  next to `mqttPassword`. Without it crew-hubd drops every command.
+- `~/.claude/crew-hub/secrets.json` (mode 0600): `"commandSecret"` next to `mqttPassword`, written by `crew-hub-pair`
+  from the pairing code (or, legacy, the same secret you typed into Crew Hub). Without it crew-hubd drops every command.
 - `~/.claude/crew-hub/config.json` (no secrets in this file):
 
   ```json
