@@ -12,7 +12,10 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
 - HA: installed 2026-10-26 by Mr Manager via HACS (repo Starkkaman/JamBoard), backup 7b08d458 before restart; entry "Crew Hub"
   prefix crew, no machines configured yet (step 5 adds nas + command secret); dashboard /crew-hub (admin, panel, custom:crew-hub-card).
   HACS updates: push to GitHub, then update.crew_hub_update in HA (needs restart).
-- Bridge tests (docs/evidence/bridge-tests.md) in progress.
+- Bridge tests done (docs/evidence/bridge-tests.md). Step 5 DONE 2026-10-26: crew_hub 0.2.0 + plugin 0.2.0, commands per
+  docs/COMMANDS.md; machine nas configured in HA (Isaac entered the secret himself); verified HA -> crew_hub.send_message -> session.
+  NAS command secret = secrets.json commandSecret (auto mode blocks reading it; don't try). Folder presets: only ~/project (trusted).
+- Next: services.yaml descriptions; MacBook (batch B: Tailscale + Mosquitto ACLs first, then /crew-hub-setup skill).
 - Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
 ## People
