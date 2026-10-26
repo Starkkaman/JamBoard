@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
+from typing import Any
 
 from homeassistant.components import frontend, mqtt
 from homeassistant.components.http import StaticPathConfig
@@ -35,6 +36,8 @@ from .const import (
 from .store import CrewStore
 
 _LOGGER = logging.getLogger(__name__)
+
+LOVELACE_DOMAIN = "lovelace"  # hass.data key and component name; not imported so a missing lovelace never breaks setup
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -92,6 +95,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> 
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> None:
+    """Entry deleted: drop the store and the card's Lovelace resource (unload alone keeps the resource)."""
+    await _async_remove_resource(hass)
     if (store := hass.data.pop(DATA_STORE, None)) is not None:
         store.active = False
         store.reset()
@@ -101,12 +106,89 @@ def _file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
+def _lovelace_resources(hass: HomeAssistant) -> Any | None:
+    """The Lovelace resource collection when it is in storage mode, else None.
+
+    hass.data["lovelace"] is a LovelaceData dataclass in recent Home Assistant (resource_mode, resources); older
+    versions used a dict ("mode"/"resource_mode", "resources"). Both are read defensively.
+    """
+    data = hass.data.get(LOVELACE_DOMAIN)
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        mode = data.get("resource_mode") or data.get("mode")
+        resources = data.get("resources")
+    else:
+        mode = getattr(data, "resource_mode", None) or getattr(data, "mode", None)
+        resources = getattr(data, "resources", None)
+    if mode != "storage" or resources is None:
+        return None
+    if not all(hasattr(resources, a) for a in ("async_items", "async_create_item", "async_update_item")):
+        return None
+    return resources
+
+
+def _is_card_resource(item: dict) -> bool:
+    return str(item.get("url", "")).split("?", 1)[0] == CARD_URL
+
+
+async def _async_sync_resource(hass: HomeAssistant, url: str) -> bool:
+    """Keep exactly one storage-mode Lovelace resource for the card, pointing at url. False when not possible."""
+    resources = _lovelace_resources(hass)
+    if resources is None:
+        return False
+    if hasattr(resources, "async_get_info"):
+        await resources.async_get_info()  # loads the storage collection if it isn't yet
+    elif not getattr(resources, "loaded", True):
+        await resources.async_load()
+        resources.loaded = True
+    ours = [item for item in resources.async_items() if _is_card_resource(item)]
+    if not ours:
+        await resources.async_create_item({"res_type": "module", "url": url})
+        _LOGGER.debug("Added Lovelace resource %s", url)
+        return True
+    keep, extra = ours[0], ours[1:]
+    if keep.get("url") != url or keep.get("type") != "module":
+        await resources.async_update_item(keep["id"], {"res_type": "module", "url": url})
+        _LOGGER.debug("Updated Lovelace resource %s to %s", keep["id"], url)
+    for item in extra:
+        await resources.async_delete_item(item["id"])
+        _LOGGER.debug("Removed duplicate Lovelace resource %s", item["id"])
+    return True
+
+
+async def _async_remove_resource(hass: HomeAssistant) -> None:
+    """Delete the card's Lovelace resource(s); used when the config entry is removed."""
+    try:
+        resources = _lovelace_resources(hass)
+        if resources is None or not hasattr(resources, "async_delete_item"):
+            return
+        if hasattr(resources, "async_get_info"):
+            await resources.async_get_info()
+        for item in [item for item in resources.async_items() if _is_card_resource(item)]:
+            await resources.async_delete_item(item["id"])
+    except Exception as err:  # noqa: BLE001 - removal must not fail on a Lovelace API change
+        _LOGGER.warning("Could not remove the Crew Hub card's Lovelace resource: %s", err)
+
+
 async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Serve the card at /crew_hub/crew-hub-card.js and load it on every frontend page (once per run)."""
+    """Serve the card at /crew_hub/crew-hub-card.js and make the frontend load it.
+
+    Storage-mode Lovelace: a managed Lovelace resource (survives in long-lived app shells such as the Companion app,
+    which never re-read extra_js_url). Otherwise (YAML mode, no lovelace, or an error): add_extra_js_url. Never both,
+    so two versions of the guarded customElements.define can't race. Decided once per Home Assistant run.
+    """
     if hass.data.get(DATA_FRONTEND) or "http" not in hass.config.components or hass.http is None:
         return
     digest = await hass.async_add_executor_job(_file_hash, CARD_PATH)
     await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(CARD_PATH), True)])
-    if "frontend" in hass.config.components:
-        frontend.add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}-{digest}")
+    url = f"{CARD_URL}?v={VERSION}-{digest}"
+    managed = False
+    if LOVELACE_DOMAIN in hass.config.components:
+        try:
+            managed = await _async_sync_resource(hass, url)
+        except Exception as err:  # noqa: BLE001 - fall back to extra_js_url on any Lovelace API surprise
+            _LOGGER.warning("Could not manage the Crew Hub card's Lovelace resource, loading it via extra_js_url: %s", err)
+    if not managed and "frontend" in hass.config.components:
+        frontend.add_extra_js_url(hass, url)
     hass.data[DATA_FRONTEND] = True

@@ -26,8 +26,10 @@ Tested with Home Assistant 2026.10.4.
    type: custom:crew-hub-card
    ```
 
-   The integration serves the card at `/crew_hub/crew-hub-card.js` and loads it on every frontend page, so no
-   Lovelace resource is needed. The card's feed (`crew_hub/subscribe`) is admin-only; other users see
+   The integration serves the card at `/crew_hub/crew-hub-card.js` and registers the Lovelace resource for it
+   automatically (storage-mode dashboards: one `module` resource, its `?v=` updated on every card change and removed
+   when the integration is deleted), so don't add one by hand. With YAML-mode resources it loads the card on every
+   frontend page instead. The card's feed (`crew_hub/subscribe`) is admin-only; other users see
    "Crew Hub integration not available".
 
 Entities (device "Crew Hub"): `sensor.crew_hub_working` (sessions working on online machines),

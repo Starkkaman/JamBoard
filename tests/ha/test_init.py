@@ -1,7 +1,9 @@
 """crew_hub end to end in the HA harness: config flow, options, MQTT -> store -> websocket, entities, admin check."""
 
+import hashlib
 import json
 import pathlib
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_mqtt_message
@@ -12,7 +14,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.crew_hub.const import CARD_URL, DATA_STORE, DOMAIN
+from custom_components.crew_hub.const import CARD_URL, DATA_STORE, DOMAIN, VERSION
 
 SECRET = "s3cret-s3cret-s3cret"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -220,3 +222,106 @@ async def test_card_served_and_identical(hass: HomeAssistant, mqtt_mock, hass_cl
     assert resp.status == 200
     body = await resp.read()
     assert body == (ROOT / "card" / "crew-hub-card.js").read_bytes()
+
+
+# ---- Lovelace resource for the card ----
+CARD_DIGEST = hashlib.sha256((ROOT / "custom_components" / "crew_hub" / "www" / "crew-hub-card.js").read_bytes()).hexdigest()[:12]
+CARD_RESOURCE_URL = f"{CARD_URL}?v={VERSION}-{CARD_DIGEST}"
+STALE_URL = "/crew_hub/crew-hub-card.js?v=0.1.0-07b1ae4aa5b4"
+OTHER = {"id": "other1", "type": "module", "url": "/hacsfiles/mushroom/mushroom.js"}
+
+
+def _resources(hass: HomeAssistant):
+    return hass.data["lovelace"].resources
+
+
+def _card_items(hass: HomeAssistant) -> list[dict]:
+    return [i for i in _resources(hass).async_items() if i["url"].split("?")[0] == CARD_URL]
+
+
+async def _setup_with_lovelace(hass: HomeAssistant, lovelace_conf: dict | None = None):
+    assert await async_setup_component(hass, "http", {})
+    assert await async_setup_component(hass, "lovelace", {"lovelace": lovelace_conf or {}})
+    hass.config.components.add("frontend")  # what the fallback checks; the real frontend isn't needed here
+    with patch("custom_components.crew_hub.frontend.add_extra_js_url") as extra:
+        entry = await _setup(hass)
+    return entry, extra
+
+
+async def test_storage_mode_creates_resource(hass: HomeAssistant, mqtt_mock, hass_storage) -> None:
+    hass_storage["lovelace_resources"] = {"version": 1, "key": "lovelace_resources", "data": {"items": [OTHER]}}
+    _, extra = await _setup_with_lovelace(hass)
+    items = _card_items(hass)
+    assert len(items) == 1
+    assert items[0]["url"] == CARD_RESOURCE_URL
+    assert items[0]["type"] == "module"
+    assert any(i["id"] == "other1" for i in _resources(hass).async_items())
+    extra.assert_not_called()
+
+
+async def test_storage_mode_updates_stale_in_place_and_drops_duplicates(
+    hass: HomeAssistant, mqtt_mock, hass_storage
+) -> None:
+    hass_storage["lovelace_resources"] = {
+        "version": 1,
+        "key": "lovelace_resources",
+        "data": {
+            "items": [
+                {"id": "mrmanager1", "type": "module", "url": STALE_URL},
+                OTHER,
+                {"id": "dup2", "type": "module", "url": "/crew_hub/crew-hub-card.js"},
+                {"id": "dup3", "type": "js", "url": "/crew_hub/crew-hub-card.js?v=0.0.9-aaaaaaaaaaaa"},
+            ]
+        },
+    }
+    _, extra = await _setup_with_lovelace(hass)
+    items = _card_items(hass)
+    assert items == [{"id": "mrmanager1", "type": "module", "url": CARD_RESOURCE_URL}]
+    assert [i["id"] for i in _resources(hass).async_items()] == ["mrmanager1", "other1"]
+    extra.assert_not_called()
+
+
+async def test_storage_mode_current_resource_left_alone(hass: HomeAssistant, mqtt_mock, hass_storage) -> None:
+    hass_storage["lovelace_resources"] = {
+        "version": 1,
+        "key": "lovelace_resources",
+        "data": {"items": [{"id": "cur", "type": "module", "url": CARD_RESOURCE_URL}]},
+    }
+    with patch(
+        "homeassistant.components.lovelace.resources.ResourceStorageCollection.async_update_item"
+    ) as update:
+        await _setup_with_lovelace(hass)
+    update.assert_not_called()
+    assert _card_items(hass) == [{"id": "cur", "type": "module", "url": CARD_RESOURCE_URL}]
+
+
+async def test_yaml_mode_falls_back_to_extra_js_url(hass: HomeAssistant, mqtt_mock) -> None:
+    _, extra = await _setup_with_lovelace(hass, {"resource_mode": "yaml"})
+    extra.assert_called_once_with(hass, CARD_RESOURCE_URL)
+    assert _card_items(hass) == []
+
+
+async def test_resource_error_falls_back_to_extra_js_url(hass: HomeAssistant, mqtt_mock, caplog) -> None:
+    with patch(
+        "homeassistant.components.lovelace.resources.ResourceStorageCollection.async_create_item",
+        side_effect=RuntimeError("boom"),
+    ):
+        _, extra = await _setup_with_lovelace(hass)
+    extra.assert_called_once_with(hass, CARD_RESOURCE_URL)
+    assert "extra_js_url: boom" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+async def test_unload_keeps_resource_remove_deletes_it(hass: HomeAssistant, mqtt_mock, hass_storage) -> None:
+    hass_storage["lovelace_resources"] = {"version": 1, "key": "lovelace_resources", "data": {"items": [OTHER]}}
+    entry, _ = await _setup_with_lovelace(hass)
+    assert len(_card_items(hass)) == 1
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert len(_card_items(hass)) == 1
+
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert _card_items(hass) == []
+    assert [i["id"] for i in _resources(hass).async_items()] == ["other1"]

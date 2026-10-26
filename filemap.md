@@ -25,10 +25,10 @@
 - `README.md` — overview + Install (HACS/manual, add integration, machines, dashboard) + dev commands / touch when install steps change.
 - `hacs.json` — HACS metadata (name, render_readme) / rarely.
 - `scripts/sync-card.sh` — copies card/crew-hub-card.js into custom_components/crew_hub/www/ / run after every card edit.
-- `custom_components/crew_hub/manifest.json` — integration manifest (mqtt dependency, version 0.1.0, single_config_entry) / bump version with const.py VERSION.
+- `custom_components/crew_hub/manifest.json` — integration manifest (mqtt dependency, version 0.1.1, single_config_entry) / bump version with const.py VERSION.
 - `custom_components/crew_hub/const.py` — domain, option keys, hass.data keys, card URL, websocket command names, VERSION / touch with the manifest.
 - `custom_components/crew_hub/store.py` — HA-free in-memory model {machine: status, snapshot, receivedAt, configured}, MQTT topic parsing, 256 KB cap, 64-machine cap, listeners, working/waiting aggregates (offline machines don't count) / touch for status rules.
-- `custom_components/crew_hub/__init__.py` — entry setup: wait for MQTT, store (outlives reloads), subscribe `<prefix>/+/snapshot|status`, static card path + add_extra_js_url, reload on options change / touch for lifecycle.
+- `custom_components/crew_hub/__init__.py` — entry setup: wait for MQTT, store (outlives reloads), subscribe `<prefix>/+/snapshot|status`, static card path, card Lovelace resource (storage mode: create/update `?v=<VERSION>-<digest>` in place, drop duplicates, delete on entry removal, kept on unload; YAML mode/no lovelace/error: add_extra_js_url instead, never both), reload on options change / touch for lifecycle.
 - `custom_components/crew_hub/websocket.py` — admin-only `crew_hub/subscribe` (result, "full", then "machine" events) and `crew_hub/get` / touch for the card feed protocol.
 - `custom_components/crew_hub/config_flow.py` — config flow (prefix, single instance) + options menu add/edit/remove machine (secret via password selector, ≥16 chars, never pre-filled) / touch for settings.
 - `custom_components/crew_hub/entity.py`, `sensor.py`, `binary_sensor.py` — device "Crew Hub"; sensor.crew_hub_working, binary_sensor.crew_hub_needs_me (attr `sessions`, unrecorded), binary_sensor.crew_hub_<id>_online; writes only on change / touch for entities.
@@ -36,7 +36,7 @@
 - `custom_components/crew_hub/www/crew-hub-card.js` — served copy of the card / never edit; run scripts/sync-card.sh.
 - `tests/test_store.py` — stdlib tests of store.py (loaded by path, no HA needed).
 - `tests/test_card_sync.py` — asserts the www copy equals card/crew-hub-card.js.
-- `tests/ha/` — pytest-homeassistant-custom-component tests (config/options flow, MQTT → store → websocket, entities, non-admin refused, card served); no `__init__.py` so unittest discovery skips it. Run: `/home/node/.local/opt/ha-test-venv/bin/python -m pytest tests/ha`.
+- `tests/ha/` — pytest-homeassistant-custom-component tests (config/options flow, MQTT → store → websocket, entities, non-admin refused, card served, card Lovelace resource create/update/dedupe/YAML fallback/remove); no `__init__.py` so unittest discovery skips it. Run: `/home/node/.local/opt/ha-test-venv/bin/python -m pytest tests/ha`.
 - `card/fixtures/snapshot-sample.json` — recorded snapshot fed to the preview / refresh when snapshot fields change.
 - `card/screenshots/` — preview screenshots (390/1280 px) and the v4 reference / regenerate after visual changes.
 - `tests/_util.py` — paths, sample loader, in-process fake MQTT broker / touch when tests need new fixtures.
