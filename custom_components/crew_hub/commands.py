@@ -1,8 +1,11 @@
 """Signed commands from Home Assistant to a machine's crew-hubd (docs/COMMANDS.md, the contract).
 
 Flow: validate args against COMMANDS.md and the machine's latest snapshot -> envelope {v, id, ts, action, args} ->
-HMAC-SHA256 over the canonical JSON with the machine's command secret -> publish <prefix>/<machine>/cmd (QoS 1, never
-retained) -> wait up to ACK_TIMEOUT for {"id", "ok", "error"?, "result"?} on <prefix>/<machine>/ack.
+HMAC-SHA256 over the canonical JSON with the machine's command secret -> deliver -> wait up to ACK_TIMEOUT for
+{"id", "ok", "error"?, "result"?}.
+Delivery depends on the machine's transport: MQTT machines get a publish on <prefix>/<machine>/cmd (QoS 1, never
+retained) and ack on <prefix>/<machine>/ack; webhook machines (docs/WEBHOOK.md) get the envelope queued in
+webhook_transport.WebhookHub for their next poll and ack in a webhook "ack" request. Both acks end in resolve_ack().
 
 Callers: the admin-only websocket command crew_hub/command and the crew_hub.* services (admin users only).
 Never logged: the secret, the signature, message text, prompts, answers. Logged: action, machine, id, outcome.
@@ -22,7 +25,17 @@ from typing import Any
 from homeassistant.components import mqtt
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CONF_MACHINE_ID, CONF_MACHINE_SECRET, CONF_MACHINES, DATA_PENDING, DATA_STORE, DOMAIN
+from .const import (
+    CONF_MACHINE_ID,
+    CONF_MACHINE_SECRET,
+    CONF_MACHINE_TRANSPORT,
+    CONF_MACHINES,
+    DATA_PENDING,
+    DATA_STORE,
+    DATA_WEBHOOK,
+    DOMAIN,
+    TRANSPORT_WEBHOOK,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -204,12 +217,19 @@ def handle_ack(hass: HomeAssistant, prefix: str, topic: str, payload: Any) -> No
         ack = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return
+    resolve_ack(hass, parts[0], ack)
+
+
+@callback
+def resolve_ack(hass: HomeAssistant, machine: str, ack: Any) -> bool:
+    """Complete the pending command ack["id"] when it was sent to this machine. True when one was completed."""
     if not isinstance(ack, dict) or not isinstance(ack.get("id"), str):
-        return
+        return False
     pending = _pending(hass).get(ack["id"])
-    if pending is None or pending[0] != parts[0] or pending[1].done():
-        return
+    if pending is None or pending[0] != machine or pending[1].done():
+        return False
     pending[1].set_result(ack)
+    return True
 
 
 def _ack_result(ack: dict) -> dict:
@@ -222,11 +242,12 @@ def _ack_result(ack: dict) -> dict:
 
 
 # ---- send ----
-def _machine_secret(hass: HomeAssistant, machine: str) -> str | None:
+def _machine_config(hass: HomeAssistant, machine: str) -> dict | None:
+    """The machine's options entry when it has a command secret."""
     for entry in hass.config_entries.async_entries(DOMAIN):
         for m in entry.options.get(CONF_MACHINES, []):
             if isinstance(m, dict) and m.get(CONF_MACHINE_ID) == machine and m.get(CONF_MACHINE_SECRET):
-                return str(m[CONF_MACHINE_SECRET])
+                return m
     return None
 
 
@@ -237,7 +258,8 @@ async def async_send_command(hass: HomeAssistant, machine: Any, action: Any, arg
     if store is None or not store.active:
         return {"ok": False, "error": "not_loaded"}
     machine = str(machine) if isinstance(machine, str) else ""
-    secret = _machine_secret(hass, machine) if machine else None
+    config = _machine_config(hass, machine) if machine else None
+    secret = str(config[CONF_MACHINE_SECRET]) if config else None
     if not secret or machine not in store.configured:
         _LOGGER.info("Crew Hub command %s for %s refused: not_configured", action, machine or "?")
         return {"ok": False, "error": "not_configured"}
@@ -256,13 +278,22 @@ async def async_send_command(hass: HomeAssistant, machine: Any, action: Any, arg
     pending = _pending(hass)
     pending[cmd_id] = (machine, fut)
     try:
-        try:
-            await mqtt.async_publish(hass, f"{store.prefix}/{machine}/cmd",
-                                     json.dumps(env, separators=(",", ":"), ensure_ascii=False), qos=1, retain=False)
-        except Exception as err:  # noqa: BLE001 - report, don't raise into the websocket/service
-            _LOGGER.warning("Crew Hub command %s for %s id %s: publish failed (%s)", action, machine, cmd_id,
-                            type(err).__name__)
-            return {"ok": False, "error": "publish_failed"}
+        if config.get(CONF_MACHINE_TRANSPORT) == TRANSPORT_WEBHOOK:
+            hub = hass.data.get(DATA_WEBHOOK)
+            if hub is None:
+                return {"ok": False, "error": "not_loaded"}
+            if not hub.enqueue(machine, env):
+                _LOGGER.info("Crew Hub command %s for %s id %s: queue_full", action, machine, cmd_id)
+                return {"ok": False, "error": "queue_full"}
+        else:
+            try:
+                await mqtt.async_publish(hass, f"{store.prefix}/{machine}/cmd",
+                                         json.dumps(env, separators=(",", ":"), ensure_ascii=False), qos=1,
+                                         retain=False)
+            except Exception as err:  # noqa: BLE001 - report, don't raise into the websocket/service
+                _LOGGER.warning("Crew Hub command %s for %s id %s: publish failed (%s)", action, machine, cmd_id,
+                                type(err).__name__)
+                return {"ok": False, "error": "publish_failed"}
         try:
             ack = await asyncio.wait_for(asyncio.shield(fut), ACK_TIMEOUT if timeout is None else timeout)
         except TimeoutError:

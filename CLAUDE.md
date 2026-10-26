@@ -15,7 +15,9 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
 - Bridge tests done (docs/evidence/bridge-tests.md). Step 5 DONE 2026-10-26: crew_hub 0.2.0 + plugin 0.2.0, commands per
   docs/COMMANDS.md; machine nas configured in HA (Isaac entered the secret himself); verified HA -> crew_hub.send_message -> session.
   NAS command secret = secrets.json commandSecret (auto mode blocks reading it; don't try). Folder presets: only ~/project (trusted).
-- Next: services.yaml descriptions; MacBook (batch B: Tailscale + Mosquitto ACLs first, then /crew-hub-setup skill).
+- 0.3.0 (2026-10-26): webhook transport for roaming machines (docs/WEBHOOK.md) via Isaac's proxy, pairing code shown once
+  in HA, `crew-hub-pair` run by the human in their own terminal (never via Claude). Interop test tests/ha/test_interop.py.
+  NAS stays on MQTT. Mac does NOT need broker ACLs/Tailscale anymore (ACLs still nice-to-have).
 - Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
 ## People

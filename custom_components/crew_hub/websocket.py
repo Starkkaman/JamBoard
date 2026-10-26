@@ -2,7 +2,7 @@
 
 crew_hub/subscribe: result, then {"type": "full", "machines": {...}}, then {"type": "machine", "id", "data"} per change.
 crew_hub/get: the full machine map as the result.
-crew_hub/command: {machine, action, args} -> signed MQTT command (commands.py); result {ok, error?, result?}.
+crew_hub/command: {machine, action, args} -> signed command over MQTT or the webhook queue (commands.py); result {ok, error?, result?}.
 """
 
 from __future__ import annotations

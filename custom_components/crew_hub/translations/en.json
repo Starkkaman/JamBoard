@@ -35,12 +35,20 @@
         "data": {
           "id": "Machine id",
           "name": "Display name",
-          "secret": "Command secret"
+          "transport": "Transport",
+          "secret": "Command secret",
+          "public_url": "Public Home Assistant URL"
         },
         "data_description": {
           "id": "The machineId from the machine's crew-hub config (for example nas).",
-          "secret": "The same command secret as on the machine (at least 16 characters)."
+          "transport": "MQTT for machines on the home network; webhook for machines that roam (they reach Home Assistant through its public URL).",
+          "secret": "MQTT machines only: the same command secret as on the machine (at least 16 characters). Webhook machines get a generated secret.",
+          "public_url": "Webhook machines only: the https:// address Home Assistant is reachable at from outside, without a path (for example https://hass.example.com)."
         }
+      },
+      "pair": {
+        "title": "Pair {machine}",
+        "description": "This pairing code is shown only once. On {machine}, run `crew-hub-pair` in your own terminal and paste it when asked (the input is hidden):\n\n`{code}`\n\nThe code holds the machine's webhook address and secret, so don't share it or paste it into a chat. The machine is already saved; if you lose the code, re-pair it from Edit a machine."
       },
       "edit": {
         "title": "Edit a machine",
@@ -58,6 +66,18 @@
           "secret": "Leave empty to keep the current secret."
         }
       },
+      "edit_webhook": {
+        "title": "Edit {machine}",
+        "data": {
+          "name": "Display name",
+          "public_url": "Public Home Assistant URL",
+          "repair": "Re-pair"
+        },
+        "data_description": {
+          "public_url": "The https:// address put into the pairing code. A change reaches the machine only when you re-pair.",
+          "repair": "Make a new webhook address and secret and show a new pairing code. The old code stops working at once."
+        }
+      },
       "remove": {
         "title": "Remove a machine",
         "data": {
@@ -68,10 +88,20 @@
     "error": {
       "invalid_machine_id": "Use 1-64 lower-case letters, digits, '-' or '_'.",
       "machine_exists": "A machine with this id already exists.",
-      "secret_too_short": "The secret must be at least 16 characters."
+      "secret_too_short": "The secret must be at least 16 characters.",
+      "invalid_transport": "Choose MQTT or webhook.",
+      "invalid_public_url": "Enter an https:// address without a path, for example https://hass.example.com."
     },
     "abort": {
       "unknown_machine": "That machine no longer exists."
+    }
+  },
+  "selector": {
+    "transport": {
+      "options": {
+        "mqtt": "MQTT (home network)",
+        "webhook": "Webhook (roaming, through the public URL)"
+      }
     }
   },
   "entity": {
@@ -89,41 +119,41 @@
   "services": {
     "send_message": {
       "name": "Send message",
-      "description": "Send a message to a Claude Code session (admin users only; not from automations).",
+      "description": "Send a text message to a Claude Code session on a machine. Admin users only; automations and scripts without a user are refused.",
       "fields": {
         "machine": {
           "name": "Machine",
-          "description": "Machine id as added in Crew Hub (for example nas)."
+          "description": "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
         },
         "session": {
           "name": "Session",
-          "description": "Local session id from the machine's snapshot."
+          "description": "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
         },
         "text": {
           "name": "Text",
-          "description": "Up to 4000 characters."
+          "description": "The message, up to 4000 characters. The session sees it prefixed with [From Isaac via Crew Hub]."
         },
         "urgent": {
           "name": "Urgent",
-          "description": "Deliver now, interrupting the current reply."
+          "description": "Deliver now, interrupting the current reply. Otherwise it is read after the current turn."
         }
       }
     },
     "answer": {
       "name": "Answer",
-      "description": "Answer a waiting permission prompt or question (admin users only; not from automations).",
+      "description": "Answer a session's waiting permission prompt or question. Admin users only; automations and scripts without a user are refused.",
       "fields": {
         "machine": {
           "name": "Machine",
-          "description": "Machine id as added in Crew Hub (for example nas)."
+          "description": "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
         },
         "session": {
           "name": "Session",
-          "description": "Local session id from the machine's snapshot."
+          "description": "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
         },
         "requestId": {
           "name": "Request id",
-          "description": "waiting.requestId from the snapshot."
+          "description": "The waiting.requestId of that session in the machine's snapshot."
         },
         "decision": {
           "name": "Decision",
@@ -131,69 +161,69 @@
         },
         "message": {
           "name": "Note",
-          "description": "Optional, up to 500 characters."
+          "description": "Optional note sent with the decision, up to 500 characters."
         },
         "answers": {
           "name": "Answers",
-          "description": "For questions: question text to chosen label."
+          "description": "For questions only: an object mapping each question's text to the chosen option label."
         }
       }
     },
     "interrupt": {
       "name": "Interrupt",
-      "description": "Interrupt a background session's current turn (admin users only; not from automations).",
+      "description": "Interrupt the current turn of a background session (sessions started with --bg). Admin users only; automations and scripts without a user are refused.",
       "fields": {
         "machine": {
           "name": "Machine",
-          "description": "Machine id as added in Crew Hub (for example nas)."
+          "description": "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
         },
         "session": {
           "name": "Session",
-          "description": "Local session id from the machine's snapshot."
+          "description": "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
         }
       }
     },
     "stop": {
       "name": "Stop",
-      "description": "Stop a background session (admin users only; not from automations).",
+      "description": "Stop (end) a background session. Admin users only; automations and scripts without a user are refused.",
       "fields": {
         "machine": {
           "name": "Machine",
-          "description": "Machine id as added in Crew Hub (for example nas)."
+          "description": "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
         },
         "session": {
           "name": "Session",
-          "description": "Local session id from the machine's snapshot."
+          "description": "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
         }
       }
     },
     "start_session": {
       "name": "Start session",
-      "description": "Start a background Claude Code session in a preset folder (admin users only; not from automations).",
+      "description": "Start a new background Claude Code session in one of the machine's folder presets. Admin users only; automations and scripts without a user are refused.",
       "fields": {
         "machine": {
           "name": "Machine",
-          "description": "Machine id as added in Crew Hub (for example nas)."
+          "description": "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
         },
         "folder": {
           "name": "Folder",
-          "description": "Folder preset key."
+          "description": "Folder preset key from the machine's snapshot (machine.commands.folders[].key)."
         },
         "model": {
           "name": "Model",
-          "description": "One of the machine's allowed models."
+          "description": "One of the machine's allowed models (machine.commands.models)."
         },
         "permissionMode": {
           "name": "Permission mode",
-          "description": "One of the machine's allowed modes."
+          "description": "One of the machine's allowed permission modes (machine.commands.permissionModes)."
         },
         "name": {
           "name": "Name",
-          "description": "Up to 60 characters."
+          "description": "Session name, up to 60 characters."
         },
         "prompt": {
           "name": "Prompt",
-          "description": "Up to 4000 characters."
+          "description": "The first prompt, up to 4000 characters."
         }
       }
     }

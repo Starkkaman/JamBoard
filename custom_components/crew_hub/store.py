@@ -171,6 +171,40 @@ class CrewStore:
     def any_waiting(self) -> bool:
         return any(s.get("status") == "waiting" for s in self._live_sessions())
 
+    # ---- webhook input (already verified by webhook_transport.py) ----
+    def set_status(self, mid: str, status: str) -> bool:
+        """Set a machine's status; listeners are told only when it changed. Returns True on change."""
+        if not isinstance(mid, str) or not MACHINE_ID_RE.match(mid):
+            return False
+        status = status if status in STATUSES else "unknown"
+        entry = self._machines.get(mid)
+        if entry is not None and entry.get("status") == status:
+            return False
+        if entry is None and mid not in self._configured and len(self._machines) >= MAX_MACHINES:
+            return False
+        entry = dict(entry or {"snapshot": None})
+        entry["status"] = status
+        entry["receivedAt"] = self._clock()  # same as an MQTT status message
+        self._machines[mid] = entry
+        self._emit({"type": "machine", "id": mid, "data": self._view(mid)})
+        return True
+
+    def set_snapshot(self, mid: str, snapshot: dict, status: str | None = None) -> bool:
+        """Store a full snapshot (and optionally the status) in one change event, like an MQTT snapshot message."""
+        if not isinstance(mid, str) or not MACHINE_ID_RE.match(mid) or not isinstance(snapshot, dict):
+            return False
+        entry = self._machines.get(mid)
+        if entry is None and mid not in self._configured and len(self._machines) >= MAX_MACHINES:
+            return False
+        entry = dict(entry or {"status": "unknown"})
+        if status is not None:
+            entry["status"] = status if status in STATUSES else "unknown"
+        entry["snapshot"] = snapshot
+        entry["receivedAt"] = self._clock()
+        self._machines[mid] = entry
+        self._emit({"type": "machine", "id": mid, "data": self._view(mid)})
+        return True
+
     # ---- MQTT input ----
     def handle_message(self, topic: str, payload: Any) -> bool:
         """Apply one MQTT message. Returns True when the model changed (and listeners were told)."""

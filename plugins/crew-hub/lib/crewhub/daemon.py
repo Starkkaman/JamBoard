@@ -1,9 +1,10 @@
-"""crew-hubd: one per machine. Spool -> state model -> ~/.claude/crew-hub/snapshot.json, plus MQTT when configured.
+"""crew-hubd: one per machine. Spool -> state model -> ~/.claude/crew-hub/snapshot.json, plus MQTT or the webhook.
 
 Loop (every POLL seconds): read new spool lines and fold them; every ENRICH seconds read ~/.claude/sessions/*.json,
 transcript tails and plan files; every PLAN_POLL seconds stat the plans dir (plans from sessions without hooks); publish the snapshot when it changed (at most once a second) and at least every 60 s.
 Signed commands on crew/<m>/cmd are verified and executed by commands.CommandHandler (docs/COMMANDS.md); acks go to
-crew/<m>/ack. Never logs secrets, prompts or command arguments.
+crew/<m>/ack. With config "transport": "webhook" (docs/WEBHOOK.md) the snapshot, acks and command polls go over HTTPS
+instead (webhook.WebhookLink); the command handler is the same. Never logs secrets, prompts or command arguments.
 """
 
 import fcntl
@@ -18,6 +19,7 @@ from .commands import CommandHandler, Executor
 from .mqtt import Client
 from .spool import Spool
 from .state import Model, now_ms
+from .webhook import WebhookLink
 
 POLL = 0.25
 ENRICH = 3.0
@@ -80,6 +82,9 @@ class MqttLink(object):
     @property
     def connected(self):
         return self.client is not None and self.client.connected
+
+    def start(self):
+        pass  # connects lazily in step()
 
     def _fail(self, what, err):
         if self.client is not None:
@@ -188,14 +193,21 @@ class Daemon(object):
             self.log("state.json unreadable (%s); starting fresh" % type(e).__name__)
         self.spool = Spool(paths.spool_path(), pos)
         self.commands = None
-        if self.cfg.mqtt:
+        if self.cfg.webhook_error:
+            log("transport webhook not usable: %s; file-only mode" % self.cfg.webhook_error)
+        if self.cfg.linked:
             cmds = self.cfg.commands
             self.commands = CommandHandler(cmds, log, executor=Executor(cmds, waiting=self.model.waiting_state, log=log))
             if cmds.enabled and not cmds.secret:
                 log("commands enabled in config.json but secrets.json has no commandSecret: commands stay off")
             elif cmds.active:
                 log("commands on: %d folder preset(s), hold %ds" % (len(cmds.folders), int(cmds.hold_seconds)))
-        self.mqtt = MqttLink(self.cfg, log, self.commands) if self.cfg.mqtt else None
+        if self.cfg.mqtt:
+            self.link = MqttLink(self.cfg, log, self.commands)
+        elif self.cfg.webhook:
+            self.link = WebhookLink(self.cfg, log, self.commands)
+        else:
+            self.link = None
         self.last_sweep = 0.0
         self.last_core = None
         self.last_publish = 0.0
@@ -207,13 +219,13 @@ class Daemon(object):
 
     def machine(self):
         m = {"id": self.cfg.machine_id, "name": self.cfg.machine_name, "version": VERSION, "updatedAt": now_ms()}
-        pub = self.cfg.commands.public() if self.cfg.mqtt else None
+        pub = self.cfg.commands.public() if self.cfg.linked else None
         if pub:
             m["commands"] = pub
         return m
 
     def commands_active(self):
-        return bool(self.cfg.mqtt and self.cfg.commands.active)
+        return bool(self.cfg.linked and self.cfg.commands.active)
 
     def sweep_answers(self, now):
         """Delete answer files nobody picked up (the hook was gone or the prompt was answered elsewhere)."""
@@ -286,8 +298,8 @@ class Daemon(object):
             write_atomic(paths.snapshot_path(), body)
         except Exception as e:
             self.log("snapshot write failed: %s" % e)
-        if self.mqtt:
-            self.mqtt.publish(body)
+        if self.link:
+            self.link.publish(body)
 
     def save_state(self, now, force=False):
         if not (force or (self.dirty_state and now - self.last_save >= SAVE_EVERY)):
@@ -301,8 +313,15 @@ class Daemon(object):
             self.log("state save failed: %s" % e)
 
     def run(self, once=False):
-        mode = "mqtt %s:%d" % (self.cfg.mqtt["host"], self.cfg.mqtt["port"]) if self.cfg.mqtt else "file-only"
+        if self.cfg.mqtt:
+            mode = "mqtt %s:%d" % (self.cfg.mqtt["host"], self.cfg.mqtt["port"])
+        elif self.cfg.webhook:
+            mode = "webhook %s" % self.cfg.webhook["host"]  # the host only: the path holds the webhook id
+        else:
+            mode = "file-only"
         self.log("crew-hubd %s started, pid %d, machine %s, %s" % (VERSION, os.getpid(), self.cfg.machine_id, mode))
+        if self.link:
+            self.link.start()
         first = True
         while not self.stop:
             now = time.time()
@@ -319,12 +338,12 @@ class Daemon(object):
             if once:
                 break
             waited = False
-            if self.mqtt:
+            if self.link:
                 try:
-                    waited = self.mqtt.step(POLL)
-                    self.mqtt.publish_acks()
+                    waited = self.link.step(POLL)
+                    self.link.publish_acks()
                 except Exception as e:
-                    self.log("mqtt error: %s" % e)
+                    self.log("%s error: %s" % (self.cfg.transport, type(e).__name__ if self.cfg.webhook else e))
             if not waited:
                 time.sleep(POLL)
         # shutdown
@@ -335,12 +354,12 @@ class Daemon(object):
             pass
         if self.commands:
             self.commands.close()
-        if self.mqtt:
+        if self.link:
             try:
-                self.mqtt.publish_acks()
+                self.link.publish_acks()
             except Exception:
                 pass
-            self.mqtt.offline()
+            self.link.offline()
         self.save_state(time.time(), force=True)
         self.log("crew-hubd stopped")
 

@@ -32,5 +32,6 @@ def nas_snapshot():
 
 @pytest.fixture
 def expected_lingering_timers() -> bool:
-    """The MQTT integration's own misc periodic timer outlives each test; crew_hub schedules no timers."""
+    """The MQTT integration's own misc periodic timer outlives each test; crew_hub's webhook online timers are
+    cancelled when the entry unloads."""
     return True

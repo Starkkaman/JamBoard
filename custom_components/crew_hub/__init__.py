@@ -4,6 +4,8 @@ docs/DESIGN.md §1: each machine's crew-hubd publishes <prefix>/<machine>/snapsh
 (LWT). This integration mirrors them in memory (store.py, never recorded), pushes changes to admin websocket subscribers
 (websocket.py) and exposes a few summary entities. Admin users can send signed commands back to a machine
 (commands.py, docs/COMMANDS.md) through crew_hub/command or the crew_hub.* services; acks arrive on <prefix>/+/ack.
+Machines off the LAN use the webhook transport instead (webhook_transport.py, docs/WEBHOOK.md): one HA webhook per
+machine feeds the same store, and their commands wait in a queue for the machine's poll.
 """
 
 from __future__ import annotations
@@ -13,7 +15,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from homeassistant.components import frontend, mqtt
+from aiohttp import web
+from aiohttp.hdrs import METH_POST
+
+from homeassistant.components import frontend, mqtt, webhook
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -26,15 +31,23 @@ from . import commands, services, websocket
 from .const import (
     CARD_FILENAME,
     CARD_URL,
+    CONF_MACHINE_ID,
+    CONF_MACHINE_NAME,
+    CONF_MACHINE_SECRET,
+    CONF_MACHINE_TRANSPORT,
+    CONF_MACHINE_WEBHOOK_ID,
     CONF_MACHINES,
     CONF_PREFIX,
     DATA_FRONTEND,
     DATA_STORE,
+    DATA_WEBHOOK,
     DEFAULT_PREFIX,
     DOMAIN,
+    TRANSPORT_WEBHOOK,
     VERSION,
 )
 from .store import CrewStore
+from .webhook_transport import WebhookHub
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,8 +83,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
         store.set_configured(machines)
     entry.runtime_data = store
 
+    # Webhook machines (docs/WEBHOOK.md): one webhook each; MQTT traffic under their ids is ignored.
+    hooked = [
+        m for m in machines
+        if isinstance(m, dict) and m.get(CONF_MACHINE_TRANSPORT) == TRANSPORT_WEBHOOK
+        and m.get(CONF_MACHINE_ID) and m.get(CONF_MACHINE_WEBHOOK_ID) and m.get(CONF_MACHINE_SECRET)
+    ]
+    hub: WebhookHub | None = hass.data.get(DATA_WEBHOOK)
+    if hub is None or hub.store is not store:
+        hub = hass.data[DATA_WEBHOOK] = WebhookHub(hass, store)
+    hub.set_machines([(m[CONF_MACHINE_ID], m[CONF_MACHINE_WEBHOOK_ID], m[CONF_MACHINE_SECRET]) for m in hooked])
+    entry.async_on_unload(hub.suspend)
+    for m in hooked:
+        _register_webhook(hass, entry, hub, m)
+    webhook_ids = {m[CONF_MACHINE_ID] for m in hooked}
+    head = prefix + "/"
+
+    def _from_webhook_machine(topic: str) -> bool:
+        return topic.startswith(head) and topic[len(head):].split("/", 1)[0] in webhook_ids
+
     @callback
     def _message(msg: mqtt.ReceiveMessage) -> None:
+        if webhook_ids and _from_webhook_machine(msg.topic):
+            return
         store.handle_message(msg.topic, msg.payload)
 
     for topic in store.topics:
@@ -79,6 +113,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
 
     @callback
     def _ack(msg: mqtt.ReceiveMessage) -> None:
+        if webhook_ids and _from_webhook_machine(msg.topic):
+            return
         commands.handle_ack(hass, prefix, msg.topic, msg.payload)
 
     entry.async_on_unload(await mqtt.async_subscribe(hass, f"{prefix}/+/ack", _ack, qos=1, encoding=None))
@@ -88,6 +124,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
+
+
+def _register_webhook(hass: HomeAssistant, entry: CrewHubConfigEntry, hub: WebhookHub, machine: dict) -> None:
+    mid, webhook_id = machine[CONF_MACHINE_ID], machine[CONF_MACHINE_WEBHOOK_ID]
+
+    async def _handle(hass: HomeAssistant, _webhook_id: str, request: web.Request) -> web.Response:
+        return await hub.async_handle(mid, request)
+
+    webhook.async_register(hass, DOMAIN, f"Crew Hub {machine.get(CONF_MACHINE_NAME) or mid}", webhook_id, _handle,
+                           local_only=False, allowed_methods=[METH_POST])
+    entry.async_on_unload(lambda: webhook.async_unregister(hass, webhook_id))
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: CrewHubConfigEntry) -> None:
@@ -105,6 +152,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> 
 async def async_remove_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> None:
     """Entry deleted: drop the store and the card's Lovelace resource (unload alone keeps the resource)."""
     await _async_remove_resource(hass)
+    if (hub := hass.data.pop(DATA_WEBHOOK, None)) is not None:
+        hub.shutdown()
     if (store := hass.data.pop(DATA_STORE, None)) is not None:
         store.active = False
         store.reset()

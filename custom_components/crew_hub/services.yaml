@@ -1,30 +1,120 @@
+# Names and descriptions are kept identical to the "services" section of strings.json (Home Assistant shows the
+# translated ones; tools that read this file get the same text).
 send_message:
+  name: "Send message"
+  description: "Send a text message to a Claude Code session on a machine. Admin users only; automations and scripts without a user are refused."
   fields:
-    machine: {required: true, selector: {text: {}}}
-    session: {required: true, selector: {text: {}}}
-    text: {required: true, selector: {text: {multiline: true}}}
-    urgent: {default: false, selector: {boolean: {}}}
+    machine:
+      name: "Machine"
+      description: "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
+      required: true
+      selector: {text: {}}
+    session:
+      name: "Session"
+      description: "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
+      required: true
+      selector: {text: {}}
+    text:
+      name: "Text"
+      description: "The message, up to 4000 characters. The session sees it prefixed with [From Isaac via Crew Hub]."
+      required: true
+      selector: {text: {multiline: true}}
+    urgent:
+      name: "Urgent"
+      description: "Deliver now, interrupting the current reply. Otherwise it is read after the current turn."
+      default: false
+      selector: {boolean: {}}
 answer:
+  name: "Answer"
+  description: "Answer a session's waiting permission prompt or question. Admin users only; automations and scripts without a user are refused."
   fields:
-    machine: {required: true, selector: {text: {}}}
-    session: {required: true, selector: {text: {}}}
-    requestId: {required: true, selector: {text: {}}}
-    decision: {required: true, selector: {select: {options: ["allow", "deny"]}}}
-    message: {selector: {text: {}}}
-    answers: {selector: {object: {}}}
+    machine:
+      name: "Machine"
+      description: "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
+      required: true
+      selector: {text: {}}
+    session:
+      name: "Session"
+      description: "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
+      required: true
+      selector: {text: {}}
+    requestId:
+      name: "Request id"
+      description: "The waiting.requestId of that session in the machine's snapshot."
+      required: true
+      selector: {text: {}}
+    decision:
+      name: "Decision"
+      description: "allow or deny."
+      required: true
+      selector: {select: {options: ["allow", "deny"]}}
+    message:
+      name: "Note"
+      description: "Optional note sent with the decision, up to 500 characters."
+      selector: {text: {}}
+    answers:
+      name: "Answers"
+      description: "For questions only: an object mapping each question's text to the chosen option label."
+      selector: {object: {}}
 interrupt:
+  name: "Interrupt"
+  description: "Interrupt the current turn of a background session (sessions started with --bg). Admin users only; automations and scripts without a user are refused."
   fields:
-    machine: {required: true, selector: {text: {}}}
-    session: {required: true, selector: {text: {}}}
+    machine:
+      name: "Machine"
+      description: "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
+      required: true
+      selector: {text: {}}
+    session:
+      name: "Session"
+      description: "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
+      required: true
+      selector: {text: {}}
 stop:
+  name: "Stop"
+  description: "Stop (end) a background session. Admin users only; automations and scripts without a user are refused."
   fields:
-    machine: {required: true, selector: {text: {}}}
-    session: {required: true, selector: {text: {}}}
+    machine:
+      name: "Machine"
+      description: "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
+      required: true
+      selector: {text: {}}
+    session:
+      name: "Session"
+      description: "Local Claude Code session id, as listed in the machine's snapshot (sessions[].id)."
+      required: true
+      selector: {text: {}}
 start_session:
+  name: "Start session"
+  description: "Start a new background Claude Code session in one of the machine's folder presets. Admin users only; automations and scripts without a user are refused."
   fields:
-    machine: {required: true, selector: {text: {}}}
-    folder: {required: true, selector: {text: {}}}
-    model: {required: true, selector: {text: {}}}
-    permissionMode: {required: true, selector: {text: {}}}
-    name: {required: true, selector: {text: {}}}
-    prompt: {required: true, selector: {text: {multiline: true}}}
+    machine:
+      name: "Machine"
+      description: "Machine id as added in Crew Hub (for example nas). Works the same for MQTT and webhook machines."
+      required: true
+      selector: {text: {}}
+    folder:
+      name: "Folder"
+      description: "Folder preset key from the machine's snapshot (machine.commands.folders[].key)."
+      required: true
+      selector: {text: {}}
+    model:
+      name: "Model"
+      description: "One of the machine's allowed models (machine.commands.models)."
+      required: true
+      selector: {text: {}}
+    permissionMode:
+      name: "Permission mode"
+      description: "One of the machine's allowed permission modes (machine.commands.permissionModes)."
+      required: true
+      selector: {text: {}}
+    name:
+      name: "Name"
+      description: "Session name, up to 60 characters."
+      required: true
+      selector: {text: {}}
+    prompt:
+      name: "Prompt"
+      description: "The first prompt, up to 4000 characters."
+      required: true
+      selector: {text: {multiline: true}}

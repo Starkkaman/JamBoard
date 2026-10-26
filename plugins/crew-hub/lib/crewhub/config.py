@@ -5,7 +5,9 @@ config.json never holds a password (other sessions read it):
   "machineId": "nas",            default: hostname
   "machineName": "NAS",          default: machineId
   "prefix": "crew",
+  "transport": "mqtt",           "mqtt" (default) or "webhook" (docs/WEBHOOK.md, roaming machines)
   "mqtt": {"host": "...", "port": 1883, "username": "..."},
+  "webhook": {"url": "https://hass.example.com"},   transport webhook only: HA's public URL (https only)
   "contextMax": {"<model substring>": tokens},
   "summaries": true,             default true; false = the hook never records Stop/SubagentStop messages
                                    (read by crew-hook itself, see hook.summaries_enabled)
@@ -18,7 +20,8 @@ config.json never holds a password (other sessions read it):
   }                                0 = publish only). Also read by crew-hook itself (hook.commands_hold).
 }
 
-secrets.json: {"mqttPassword": "...", "commandSecret": "..." (optional: signed commands)}
+secrets.json: {"mqttPassword": "...", "commandSecret": "..." (signed commands; transport webhook: also signs every
+request), "webhookId": "..." (transport webhook only)}. crew-hub-pair (pair.py) writes both files.
 Password order: secrets.json mqttPassword, then the legacy config.json mqtt.password. load(migrate=True), called by
 crew-hubd under its pidfile lock, moves a legacy password into secrets.json and rewrites config.json without it.
 Nothing here ever logs a secret value.
@@ -29,6 +32,7 @@ import os
 import re
 import socket
 import stat
+from urllib.parse import urlsplit
 
 from . import paths
 
@@ -40,6 +44,36 @@ HOLD_MAX = 55  # hooks.json gives PermissionRequest a 65 s timeout: the hold mus
 FOLDER_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,79}$")
 MODE_RE = re.compile(r"^[A-Za-z]{1,30}$")
+WEBHOOK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,256}$")
+# Tests only: plain http is accepted for a loopback host when this is "1". Real hubs are always https.
+TEST_HTTP_ENV = "CREWHUB_TEST_ALLOW_HTTP"
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def parse_webhook_url(url):
+    """{"scheme", "host", "port", "base"} for HA's public URL, or ValueError(reason). The reason never repeats the URL."""
+    if not isinstance(url, str) or not url or len(url) > 2048 or any(c.isspace() or ord(c) < 32 for c in url):
+        raise ValueError("not a URL")
+    try:
+        p = urlsplit(url)
+        port = p.port
+    except ValueError:
+        raise ValueError("not a URL")
+    scheme = (p.scheme or "").lower()
+    host = p.hostname
+    if not host:
+        raise ValueError("no host")
+    if p.username is not None or p.password is not None:
+        raise ValueError("credentials in the URL")
+    if p.query or p.fragment:
+        raise ValueError("query or fragment in the URL")
+    if scheme == "https":
+        default = 443
+    elif scheme == "http" and os.environ.get(TEST_HTTP_ENV) == "1" and host in LOOPBACK:
+        default = 80
+    else:
+        raise ValueError("must start with https://")
+    return {"scheme": scheme, "host": host, "port": port or default, "base": p.path.rstrip("/")}
 
 
 def hold_seconds(value):
@@ -116,9 +150,12 @@ class Config(object):
         self.machine_id = _topic_safe(data.get("machineId") or host)
         self.machine_name = str(data.get("machineName") or data.get("machineId") or host)[:80]
         self.prefix = _topic_safe(data.get("prefix") or "crew")
+        self.transport = "webhook" if data.get("transport") == "webhook" else "mqtt"
         self.mqtt = None
+        self.webhook = None
+        self.webhook_error = None  # why transport webhook is unusable (safe to log: never a URL or a secret)
         m = data.get("mqtt")
-        if isinstance(m, dict) and m.get("host"):
+        if self.transport == "mqtt" and isinstance(m, dict) and m.get("host"):
             try:
                 port = int(m.get("port") or 1883)
             except Exception:
@@ -135,6 +172,8 @@ class Config(object):
         cs = secrets.get("commandSecret")
         self.command_secret = cs if isinstance(cs, str) and cs else None
         self.commands = Commands(data.get("commands"), self.command_secret)
+        if self.transport == "webhook":
+            self._webhook(data.get("webhook"), secrets.get("webhookId"))
         cm = data.get("contextMax")
         self.context_max = {}
         if isinstance(cm, dict):
@@ -143,6 +182,31 @@ class Config(object):
                     self.context_max[str(k).lower()] = int(v)
                 except Exception:
                     pass
+
+    def _webhook(self, block, webhook_id):
+        url = block.get("url") if isinstance(block, dict) else None
+        if not url:
+            self.webhook_error = "config.json has no webhook.url"
+            return
+        try:
+            target = parse_webhook_url(url)
+        except ValueError as e:
+            self.webhook_error = "config.json webhook.url unusable (%s)" % e
+            return
+        if not (isinstance(webhook_id, str) and WEBHOOK_ID_RE.match(webhook_id)):
+            self.webhook_error = "secrets.json has no usable webhookId"
+            return
+        if not self.command_secret:
+            self.webhook_error = "secrets.json has no commandSecret"
+            return
+        target["id"] = webhook_id
+        target["secret"] = self.command_secret
+        self.webhook = target
+
+    @property
+    def linked(self):
+        """True when snapshots go somewhere besides snapshot.json (MQTT or webhook)."""
+        return bool(self.mqtt or self.webhook)
 
     def topic(self, leaf):
         return "%s/%s/%s" % (self.prefix, self.machine_id, leaf)
