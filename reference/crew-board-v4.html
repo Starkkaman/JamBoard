@@ -1,0 +1,319 @@
+<title>Crew Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Londrina+Solid:wght@400;900&family=Jost:wght@400;500;600&display=swap">
+<style>
+/* Layout: one column, phone first. Plan strip, then one block per Claude session (working first) with its agents and live activity inside. Jamfin's Cut Paper night palette (single dark look). */
+:root{
+  --ink:#141210; --slab:#1f1c19; --slab2:#2a2622; --paper:#ece2c9; --dim:#9a8f7c; --ochre:#e5a31b; --red:#d43a1c; --teal:#3f9aa5; --line:#34302a;
+  --display:"Londrina Solid","Arial Black",Impact,sans-serif;
+  --body:"Jost","Helvetica Neue",Arial,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--ink);color:var(--paper);font:15px/1.5 var(--body);margin:0}
+.wrap{max-width:780px;margin:0 auto;padding-inline:16px;padding-block:22px 48px;display:grid;gap:22px}
+h1,h2,h3{font-family:var(--display);font-weight:900;text-transform:uppercase;margin:0;line-height:.92;letter-spacing:.01em;text-wrap:balance}
+h1{font-size:clamp(2.4rem,9vw,3.6rem)} h1 span{color:var(--ochre)}
+h2{font-size:1.45rem} h3{font-size:1.1rem}
+.label{font:600 .72rem/1.25 var(--body);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.top{display:grid;gap:10px}
+.fresh{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.dot{width:9px;height:9px;background:var(--dim);display:inline-block;flex:none}
+.dot.live{background:var(--ochre);animation:pulse 1.6s linear infinite}
+@keyframes pulse{50%{opacity:.25}}
+.notice{background:var(--slab);border-left:6px solid var(--red);padding:12px 14px;display:grid;gap:8px}
+button{font:600 .8rem/1 var(--body);letter-spacing:.12em;text-transform:uppercase;background:var(--ochre);color:var(--ink);border:0;padding:11px 14px;cursor:pointer;justify-self:start}
+button:focus-visible,a:focus-visible{outline:2px solid var(--paper);outline-offset:2px}
+
+/* plan strip */
+.flow{background:var(--paper);color:var(--ink);padding:16px 18px 20px;display:grid;gap:10px;clip-path:polygon(0 0,100% 0,100% 82%,97% 100%,0 100%)}
+.flow .label{color:#5c5446}
+.bar{height:10px;background:#cfc3a6;position:relative}
+.bar i{position:absolute;inset:0 auto 0 0;background:var(--red);width:0}
+.flowmeta{display:flex;gap:6px 16px;flex-wrap:wrap;font-weight:500;font-variant-numeric:tabular-nums}
+.phase{background:var(--ink);color:var(--paper);padding:2px 8px;font:600 .72rem/1.4 var(--body);letter-spacing:.14em;text-transform:uppercase}
+.queue{display:grid;gap:4px;margin:0;padding:0;list-style:none}
+.queue li{display:flex;gap:10px;align-items:baseline;font-weight:500;min-width:0}
+.queue li b{font:600 .66rem/1 var(--body);letter-spacing:.12em;text-transform:uppercase;padding:4px 6px;border:1.5px solid currentColor;flex:none}
+.queue li.done{opacity:.55}.queue li span{min-width:0;overflow-wrap:anywhere}
+
+/* sessions */
+.sessions{display:grid;gap:16px}
+.sess{background:var(--slab);display:grid;gap:10px;padding:14px 16px 16px 18px;border-left:6px solid var(--line)}
+.sess.working{border-left-color:var(--ochre)} .sess.blocked{border-left-color:var(--red)} .sess.failed{border-left-color:var(--red)}
+.sess.idle,.sess.completed,.sess.review_ready{border-left-color:var(--teal)}
+.row{display:flex;gap:8px 12px;justify-content:space-between;align-items:baseline;flex-wrap:wrap}
+.name{min-width:0;overflow-wrap:anywhere}
+.chip{font:600 .66rem/1 var(--body);letter-spacing:.14em;text-transform:uppercase;padding:5px 7px;border:1.5px solid currentColor;flex:none}
+.c-working{color:var(--ochre)} .c-blocked,.c-failed{color:var(--red)} .c-idle,.c-completed,.c-review_ready,.c-done{color:var(--teal)} .c-queued{color:var(--dim)}
+.meta{display:flex;gap:4px 14px;flex-wrap:wrap;color:var(--dim);font-size:.85rem;font-variant-numeric:tabular-nums}
+.summary{min-width:0;overflow-wrap:anywhere}
+.ctx{height:5px;background:var(--line);position:relative;max-width:220px}
+.ctx i{position:absolute;inset:0 auto 0 0;background:var(--dim)}
+.ctx.hot i{background:var(--red)}
+
+/* agents inside a session */
+.agents{display:grid;gap:8px}
+.agent{background:var(--slab2);padding:10px 12px;display:grid;gap:6px;border-left:4px solid var(--line)}
+.agent.running{border-left-color:var(--ochre)} .agent.done{border-left-color:var(--teal)} .agent.failed{border-left-color:var(--red)}
+.agent .now{display:flex;gap:8px;align-items:baseline;min-width:0}
+.agent .now span{min-width:0;overflow-wrap:anywhere}
+.trail{margin:0;padding:0;list-style:none;display:grid;gap:2px;color:var(--dim);font-size:.85rem}
+.trail li{display:flex;gap:8px;min-width:0}.trail li span{min-width:0;overflow-wrap:anywhere}
+.trail time{font-variant-numeric:tabular-nums;flex:none}
+.muted{color:var(--dim);font-size:.85rem}
+.empty{color:var(--dim);background:var(--slab);padding:16px}
+.diag{background:var(--slab);padding:10px 14px}
+.diag summary{cursor:pointer}
+.diag pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 ui-monospace,Menlo,monospace;color:var(--paper);margin:8px 0 0}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="label">Claude sessions · live</span>
+    <h1>Crew <span>Board</span></h1>
+    <div class="fresh label"><i class="dot" id="dot"></i><span id="fresh">Connecting…</span></div>
+  </header>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <section class="flow" id="flow" aria-live="polite">
+    <span class="label">Current plan</span>
+    <h2 id="flowTitle">No plan reported yet</h2>
+    <div class="bar"><i id="flowBar"></i></div>
+    <div class="flowmeta"><span class="phase" id="flowPhase">idle</span><span id="flowCount"></span></div>
+    <ul class="queue" id="queue"></ul>
+  </section>
+
+  <details class="diag" id="diagBox" open>
+    <summary class="label">Diagnostics</summary>
+    <pre id="diag">Starting…</pre>
+  </details>
+
+  <section class="sessions" id="sessions" aria-live="polite">
+    <div class="empty">Your Claude Code sessions appear here, working ones first, with every agent inside them and what each is doing right now.</div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const SERVER = "Claude Code Remote";
+const BUCKET = {SESSION_STATUS_BUCKET_WORKING:"working", SESSION_STATUS_BUCKET_BLOCKED:"blocked", SESSION_STATUS_BUCKET_FAILED:"failed",
+                SESSION_STATUS_BUCKET_REVIEW_READY:"review_ready", SESSION_STATUS_BUCKET_COMPLETED:"completed"};
+const LABEL = {working:"working", blocked:"needs you", failed:"failed", review_ready:"ready", completed:"done", idle:"idle"};
+let mcp = null, sessions = [], flow = null, cards = [], lastOk = null, polling = false;
+const ev = new Map(); // sessionId -> {cursor, tasks: Map}
+
+const diag = {};
+function d(key, val){ diag[key] = val; const p = document.getElementById("diag"); if (p) p.textContent = Object.entries(diag).map(([k, v]) => k + ": " + (typeof v === "string" ? v : JSON.stringify(v, null, 1))).join("\n"); }
+const errInfo = e => ({code: e?.code, message: String(e?.message || "").slice(0, 300), retryable: e?.retryable, result: e?.result ? JSON.stringify(e.result).slice(0, 300) : undefined});
+const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+const unwrap = r => { const p = r && (r.payload ?? r); return (p && p.ccr) ? p.ccr : p; };
+function dur(a, b){ if(!a) return ""; const s=Math.max(0,Math.round(((b?Date.parse(b):Date.now())-Date.parse(a))/1000)), m=Math.floor(s/60), h=Math.floor(m/60);
+  return h?`${h} h ${m%60} min`:m?`${m} min ${s%60} s`:`${s} s`; }
+function ago(iso){ return iso ? dur(iso) + " ago" : ""; }
+function hm(iso){ try { return new Date(iso).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); } catch { return ""; } }
+
+function notice(text, action){
+  const n = $("notice"); n.replaceChildren();
+  if (!text) { n.hidden = true; return; }
+  n.append(el("div", null, text)); if (action) n.append(action); n.hidden = false;
+}
+let perms = null;
+const PERM = "mcp:" + SERVER;
+function manageButton(){
+  const b = el("button", null, "Open this page's permissions");
+  b.onclick = async () => {
+    try { await perms.manage(); } catch { notice("Couldn't open the panel. Use the Permissions item in this artifact's menu at the top of the page, and allow Claude Code Remote."); return; }
+    const s = await perms.state(PERM).catch(() => "unavailable");
+    if (s === "granted" || s === "prompt") { notice(""); poll(true); } else accessNotice(s);
+  };
+  return b;
+}
+function accessNotice(s){
+  if (s === "denied") notice("Session access (Claude Code Remote) is switched off for this page. Turn it on in the panel, then come back.", perms ? manageButton() : null);
+  else if (s === "prompt") { const b = el("button", null, "Allow access to my sessions"); b.onclick = async () => { const r = await perms.request([PERM]).catch(() => ({})); if (r[PERM] === "denied") accessNotice("denied"); else { notice(""); poll(true); } }; notice("This page needs your OK to read your Claude Code sessions.", b); }
+}
+function failure(e){
+  const c = e && e.code;
+  if (c === "approval_required") { const b = el("button", null, "Allow access to my sessions"); b.onclick = () => { notice(""); poll(true); }; notice("This page needs your OK to read your Claude Code sessions.", b); }
+  else if (c === "not_in_manifest" && perms) notice("Session access (Claude Code Remote: list_sessions and list_events) is switched off for this page. Turn it on in the panel, then come back.", manageButton());
+  else if (c === "needs_reauth") notice("Reconnect Claude Code Remote in claude.ai Settings → Connectors, then reload this page.");
+  else if (c === "server_not_connected" || c === "selection_required") notice("Claude Code Remote isn't available in this view. Open the page in claude.ai, signed in as the session owner.");
+  else if (c === "not_in_manifest" || c === "blocked_by_policy") notice("Session access is turned off for this page. Turn it back on from the page's Permissions menu.");
+  else if (c === "not_granted" || c === "capability_disabled" || c === "capability_removed") notice("Live session data can't run in this view. Open the page in claude.ai.");
+  else return false;
+  return true;
+}
+
+/* ---- events: tasks and who owns them ---- */
+function ingest(sid, events){
+  const st = ev.get(sid);
+  for (const e of events || []) {
+    const s = e.system && (e.system.internal_anthropic_catchall || e.system);
+    if (!s || !s.task_id) continue;
+    let t = st.tasks.get(s.task_id);
+    if (s.subtype === "task_started") {
+      t = Object.assign(t || {}, {id: s.task_id, desc: s.description || t?.desc || "", type: s.task_type || "", parent: s.owned_by_subagent ? s.parent_task_id : null, start: e.created_at, status: t?.status === "completed" ? t.status : "running"});
+      st.tasks.set(s.task_id, t);
+    } else if (s.subtype === "task_notification") {
+      t = t || {id: s.task_id, desc: s.summary || "", type: "", parent: null, start: null};
+      t.status = s.status || "completed"; t.end = e.created_at; if (!t.desc) t.desc = s.summary || "";
+      st.tasks.set(s.task_id, t);
+    }
+  }
+  if (st.tasks.size > 400) [...st.tasks.keys()].slice(0, st.tasks.size - 400).forEach(k => st.tasks.delete(k));
+}
+
+async function fetchEvents(sid){
+  if (!ev.has(sid)) ev.set(sid, {cursor: null, tasks: new Map()});
+  const st = ev.get(sid);
+  for (let page = 0; page < 3; page++) {
+    const input = st.cursor ? {session_id: sid, kinds: ["system"], limit: 100, after_id: st.cursor} : {session_id: sid, kinds: ["system"], limit: 100};
+    const r = unwrap(await mcp.callTool(SERVER, "list_events", input, {cache: false}));
+    ingest(sid, r?.data);
+    if (r?.last_id) st.cursor = r.last_id;
+    if (!st.cursor || !r?.has_more || !input.after_id) break;
+  }
+}
+
+async function poll(force){
+  if (polling || !mcp) return; if (!force && document.visibilityState === "hidden") return;
+  polling = true;
+  try {
+    let raw;
+    try { raw = await mcp.callTool(SERVER, "list_sessions", {limit: 25, mine: true}, {cache: false}); }
+    catch (e) { d("list_sessions error", errInfo(e)); throw e; }
+    const r = unwrap(raw);
+    d("list_sessions", raw ? {payloadType: typeof raw.payload, keys: Object.keys(r || {}).slice(0, 6), sessions: (r?.data || []).length, firstText: (raw.content?.[0]?.text || "").slice(0, 160)} : "no result");
+    sessions = (r?.data || []).filter(s => s.session_status !== "SESSION_STATUS_ARCHIVED");
+    const live = sessions.filter(s => ["working", "blocked"].includes(BUCKET[s.status_bucket]) || (flow && flow.sessionId === s.id));
+    for (const s of live) { try { await fetchEvents(s.id); d("list_events " + s.id.slice(-6), "ok, " + (ev.get(s.id)?.tasks.size || 0) + " tasks"); } catch (e) { d("list_events error", errInfo(e)); if (failure(e)) throw e; } }
+    lastOk = new Date().toISOString(); notice("");
+    $("dot").classList.add("live");
+  } catch (e) {
+    if (!failure(e)) $("fresh").textContent = "Couldn't reach your sessions just now (" + (e?.code || "error") + "). Retrying.";
+    $("dot").classList.remove("live");
+  } finally { polling = false; render(); }
+}
+
+/* ---- render ---- */
+function renderFlow(){
+  if (!flow) return;
+  $("flowTitle").textContent = flow.title || "No plan running";
+  const total = flow.total || 0, done = Math.min(flow.done || 0, total);
+  $("flowBar").style.width = total ? (100 * done / total) + "%" : "0";
+  $("flowPhase").textContent = flow.finished ? "finished" : (flow.phase || "idle");
+  $("flowCount").textContent = total ? `${done} of ${total} task${total === 1 ? "" : "s"} accepted` : "";
+  const q = $("queue"); q.replaceChildren();
+  cards.slice().sort((a, b) => (a.order ?? 99) - (b.order ?? 99)).forEach(c => {
+    const st = c.status || "queued";
+    const li = el("li", st === "done" ? "done" : ""); li.append(el("b", "c-" + (st === "running" ? "working" : st), st === "running" ? "working" : st), el("span", null, c.title || c.id));
+    q.append(li);
+  });
+}
+
+function agentName(id, st){
+  const card = cards.find(c => c.agentId === id);
+  if (card) return card.title;
+  const t = st.tasks.get(id);
+  return (t && t.desc) || ("Agent " + id.slice(0, 7));
+}
+
+function renderSession(s){
+  const b = BUCKET[s.status_bucket] || (s.session_status === "SESSION_STATUS_IDLE" ? "idle" : "idle");
+  const box = el("article", "sess " + b);
+  const r = el("div", "row"); r.append(el("h3", "name", s.title || s.id), el("span", "chip c-" + b, LABEL[b] || b)); box.append(r);
+  const md = s.external_metadata || {};
+  const sum = s.task_summary || md.post_turn_summary?.status_detail || s.post_turn_summary?.status_detail || "";
+  if (sum) box.append(el("div", "summary", sum));
+  const m = el("div", "meta");
+  if (md.model || s.configured_model) m.append(el("span", null, (md.model || s.configured_model).replace("claude-", "")));
+  if (md.usage?.cost_usd != null) m.append(el("span", null, "$" + md.usage.cost_usd.toFixed(2)));
+  if (s.updated_at) m.append(el("span", null, "active " + ago(s.updated_at)));
+  if (s.connection_status === "disconnected") m.append(el("span", null, "computer offline"));
+  box.append(m);
+  const cu = md.context_usage;
+  if (cu && cu.max_tokens) {
+    const pct = Math.round(100 * cu.used_tokens / cu.max_tokens);
+    const c = el("div", "ctx" + (pct > 85 ? " hot" : "")); const i = el("i"); i.style.width = pct + "%"; c.append(i);
+    const lab = el("span", "label", `Context ${pct}%`);
+    box.append(lab, c);
+  }
+  const st = ev.get(s.id);
+  if (st && st.tasks.size) {
+    const tasks = [...st.tasks.values()];
+    const parents = new Set(tasks.filter(t => t.parent).map(t => t.parent));
+    tasks.filter(t => /agent/i.test(t.type)).forEach(t => parents.add(t.id));
+    cards.filter(c => c.agentId && (!flow || flow.sessionId === s.id)).forEach(c => parents.add(c.agentId));
+    const ag = el("div", "agents");
+    const list = [...parents].map(id => {
+      const kids = tasks.filter(t => t.parent === id).sort((a, b) => String(a.start || a.end).localeCompare(String(b.start || b.end)));
+      const self = st.tasks.get(id); const card = cards.find(c => c.agentId === id);
+      const running = kids.filter(k => k.status === "running");
+      let status = card?.status === "done" || card?.status === "failed" ? card.status
+        : self?.status && self.status !== "running" ? (self.status === "completed" ? "done" : "failed")
+        : running.length || (kids.length && Date.now() - Date.parse(kids.at(-1).end || kids.at(-1).start) < 10 * 60e3) ? "running" : "done";
+      const start = self?.start || card?.startedAt || kids[0]?.start;
+      const lastAt = kids.length ? (kids.at(-1).end || kids.at(-1).start) : start;
+      return {id, kids, running, status, start, lastAt, end: self?.end || card?.endedAt, card};
+    }).sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || String(b.lastAt).localeCompare(String(a.lastAt))).slice(0, 8);
+    list.forEach(a => {
+      const c = el("div", "agent " + a.status);
+      const rr = el("div", "row"); rr.append(el("strong", "name", agentName(a.id, st)), el("span", "chip c-" + (a.status === "running" ? "working" : a.status), a.status === "running" ? "working" : a.status));
+      c.append(rr);
+      const mm = el("div", "meta");
+      if (a.card?.tier) mm.append(el("span", null, a.card.tier));
+      if (a.start) mm.append(el("span", "elapsed", (a.status === "running" ? "running " : "took ") + dur(a.start, a.status === "running" ? null : (a.end || a.lastAt))));
+      mm.append(el("span", null, a.kids.length + " step" + (a.kids.length === 1 ? "" : "s")));
+      c.append(mm);
+      const cur = a.running.at(-1);
+      if (a.status === "running" && cur) { const n = el("div", "now"); n.append(el("i", "dot live"), el("span", null, cur.desc)); c.append(n); }
+      if (a.card?.summary && a.status !== "running") c.append(el("div", "summary", a.card.summary));
+      const tr = el("ul", "trail");
+      a.kids.filter(k => k !== cur).slice(-3).reverse().forEach(k => { const li = el("li"); li.append(el("time", null, hm(k.end || k.start)), el("span", null, k.desc)); tr.append(li); });
+      if (tr.children.length) c.append(tr);
+      ag.append(c);
+    });
+    const mainRunning = tasks.filter(t => !t.parent && !parents.has(t.id) && t.status === "running");
+    if (mainRunning.length) { const n = el("div", "muted"); n.textContent = "Main session: " + mainRunning.map(t => t.desc).filter(Boolean).slice(-2).join(" · "); ag.prepend(n); }
+    if (ag.children.length) box.append(ag);
+  }
+  return box;
+}
+
+function render(){
+  renderFlow();
+  if (sessions.length) {
+    const order = {working:0, blocked:1, failed:2, review_ready:3, idle:4, completed:5};
+    const box = $("sessions"); box.replaceChildren();
+    sessions.slice().sort((a, b) => (order[BUCKET[a.status_bucket] || "idle"] - order[BUCKET[b.status_bucket] || "idle"]) || String(b.updated_at).localeCompare(String(a.updated_at)))
+      .slice(0, 12).forEach(s => box.append(renderSession(s)));
+  }
+  if (lastOk) $("fresh").textContent = "Updated " + ago(lastOk);
+}
+
+(async () => {
+  const [db, m] = await Promise.all([window.claude?.use?.("db"), window.claude?.use?.("mcp")]);
+  mcp = m;
+  if (db) {
+    db.doc("status/flow").onSnapshot(s => { flow = s.exists ? s.data() : null; render(); }, () => {});
+    db.collection("agents").onSnapshot(q => { cards = q.docs.map(d => ({id: d.id, ...d.data()})); render(); }, () => {});
+  }
+  if (!mcp) { $("fresh").textContent = "Live session data can't run in this view. Open the page in claude.ai."; render(); return; }
+  perms = await window.claude?.use?.("permissions");
+  const s = perms ? await perms.state(PERM).catch(() => "unavailable") : "unavailable";
+  d("permission " + PERM, s);
+  if (perms) d("all permissions", await perms.state().catch(e => "state() failed: " + e?.code));
+  try { const lt = await mcp.listTools(); d("listTools", (lt.servers || []).map(x => ({server: x.server, kind: x.kind, auth: x.authStatus, tools: (x.tools || []).map(t => t.name)}))); }
+  catch (e) { d("listTools error", errInfo(e)); }
+  $("fresh").textContent = "Session access: " + ({granted: "allowed", prompt: "not asked yet", denied: "switched off", unavailable: "unknown"}[s] || s);
+  if (s === "denied") { accessNotice("denied"); return; }
+  await poll(true);
+  setInterval(poll, 8000);
+  setInterval(() => { if (lastOk) $("fresh").textContent = "Updated " + ago(lastOk); document.querySelectorAll(".agent.running .elapsed").forEach(()=>{}); }, 1000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") poll(true); });
+})();
+</script>
