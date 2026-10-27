@@ -15,6 +15,7 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
 - Bridge tests done (docs/evidence/bridge-tests.md). Step 5 DONE 2026-10-26: crew_hub 0.2.0 + plugin 0.2.0, commands per
   docs/COMMANDS.md; machine nas configured in HA (Isaac entered the secret himself); verified HA -> crew_hub.send_message -> session.
   NAS command secret = secrets.json commandSecret (auto mode blocks reading it; don't try). Folder presets: only ~/project (trusted).
+- 0.4.0 (2026-10-26): Active plans stack, idle section, stopped agents (restart/inactive/TaskStop), Clear finished + dismiss (HA Store crew_hub.dismissed), human names, plan-rule install on pairing.
 - 0.3.1: secrets + webhook ids in private HA Store (crew_hub.secrets), never in config-entry options; mqtt machines pair by code too.
 - 0.3.0 (2026-10-26): webhook transport for roaming machines (docs/WEBHOOK.md) via Isaac's proxy, pairing code shown once
   in HA, `crew-hub-pair` run by the human in their own terminal (never via Claude). Interop test tests/ha/test_interop.py.
@@ -24,7 +25,7 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
 ## People
 - Jamfin session = local name `project-ac` (CCR session_01BPprSFdhBQg3taJLueQEUy; PROMPT.md says "project-4c", wrong).
   Agreed: plan file ~/.claude/crew-hub/plans/<local session_id>.json, whole-file rewrites via Write/Edit, fields in DESIGN.md §3.
-- Home Assistant Mr Manager = local name `project-2c` (CCR session_012zoHCHE3a15umwYuRC4XwL). Owns all HA changes.
+- Home Assistant Mr Manager = local name `project-1e` since the 2026-10-26 16:31 restart (was project-2c) (CCR session_012zoHCHE3a15umwYuRC4XwL). Owns all HA changes.
   Local names change on restart: check ~/.claude/sessions/*.json (`name`, `bridgeSessionId`) or ListAgents.
 
 ## HA facts (from Mr Manager, 2026-10-26)
