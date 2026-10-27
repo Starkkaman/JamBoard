@@ -23,7 +23,7 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture
 def nas_snapshot():
-    """The card fixture's nas machine: Jamfin working, Mr Manager + Music Assistant waiting, error demo + Crew Hub idle."""
+    """The card fixture's nas machine: Jamfin, NerveOS + Crew Hub working, Mr Manager + Music Assistant waiting, error demo + 5 more idle."""
     data = json.loads(FIXTURE.read_text())
     snap = copy.deepcopy(data["nas"])
     snap.pop("status", None)

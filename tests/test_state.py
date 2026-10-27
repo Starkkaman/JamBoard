@@ -6,7 +6,8 @@ import unittest
 
 import _util  # noqa: F401
 from crewhub.redact import redact
-from crewhub.state import Model, cap_snapshot, read_transcript_usage, validate_plan
+from crewhub.state import (AGENT_IDLE_MS, FINISHED_TTL_MS, MAX_FINISHED, Model, cap_snapshot, display_name,
+                           is_derived_name, read_transcript_usage, validate_plan)
 
 SID = "7c1addf5-73c5-41d7-9225-77ba4bbbb2d5"
 MACHINE = {"id": "test", "name": "Test", "version": "0", "updatedAt": 0}
@@ -283,7 +284,9 @@ class PlanPollTest(unittest.TestCase):
         self.write_plan("dead-1")
         m.poll_plans(self.plans, self.sessions)
         s = m.sessions["live-1"]
-        self.assertEqual((s["status"], s["name"], s["ccr"], s["_pid"]), ("working", "project-ac", "session_abc", os.getpid()))
+        # a derived local name is not shown: the plan title wins, the local name stays in localName
+        self.assertEqual((s["status"], s["name"], s["localName"], s["ccr"], s["_pid"]),
+                         ("working", "Plan of live-1", "project-ac", "session_abc", os.getpid()))
         d = m.sessions["dead-1"]
         self.assertEqual((d["status"], d["name"]), ("idle", "Plan of dead-1"))
         self.assertNotIn("_pid", d)
@@ -331,6 +334,256 @@ class PlanPollTest(unittest.TestCase):
         m.apply({"v": 1, "ts": time.time(), "ev": "UserPromptSubmit", "sid": "p1"})
         self.assertNotIn("_fromPlan", m.sessions["p1"])
         self.assertEqual(m.sessions["p1"]["status"], "working")
+
+
+DEAD_PID = 2 ** 22 + 4242  # beyond pid_max: never alive
+
+
+def _reg(d, name, pid, sid="s", status="idle", upd=10, **extra):
+    data = {"pid": pid, "sessionId": sid, "name": name, "status": status, "updatedAt": upd, "statusUpdatedAt": upd}
+    data.update(extra)
+    with open(os.path.join(d, "%s.json" % pid), "w") as f:
+        json.dump(data, f)
+
+
+class AgentLifecycleTest(unittest.TestCase):
+    """0.4.0: stopped agents, inactivity, pruning by time and count."""
+
+    T0 = 1792000000.0
+
+    def ev(self, m, ev, t, **kw):
+        rec = {"v": 1, "ts": self.T0 + t, "ev": ev, "sid": "s"}
+        rec.update(kw)
+        m.apply(rec)
+        return m.sessions["s"]
+
+    def ms(self, t):
+        return int((self.T0 + t) * 1000)
+
+    def started(self, m, aid, t, title="Do things", steps=1):
+        self.ev(m, "SubagentStart", t, agent=aid, atype="general-purpose")
+        self.ev(m, "PostToolUse", t, tool="Agent", aid=aid, title=title)
+        for i in range(steps):
+            self.ev(m, "PreToolUse", t + i, agent=aid, tool="Bash", desc="step %d" % i)
+
+    def agent(self, m, aid):
+        return [a for a in m.sessions["s"]["agents"] if a["id"] == aid][0]
+
+    def test_session_start_marks_running_agents_stopped(self):
+        m = Model()
+        self.ev(m, "UserPromptSubmit", 0)
+        self.started(m, "a1", 1)
+        self.started(m, "a2", 2)
+        self.ev(m, "SubagentStop", 5, agent="a2")
+        self.ev(m, "SessionStart", 100, source="resume")
+        a1, a2 = self.agent(m, "a1"), self.agent(m, "a2")
+        self.assertEqual((a1["status"], a1["stopReason"], a1["endedAt"]), ("stopped", "session restarted", self.ms(100)))
+        self.assertEqual((a2["status"], a2["stopReason"]), ("done", None))
+        # the plan is the orchestrator's truth: untouched
+        self.assertIsNone(m.sessions["s"]["plan"])
+        # a stopped agent that steps again is running again
+        self.ev(m, "PreToolUse", 101, agent="a1", tool="Read", file="x.py")
+        a1 = self.agent(m, "a1")
+        self.assertEqual((a1["status"], a1["endedAt"], a1["stopReason"]), ("running", None, None))
+        snap = m.snapshot(MACHINE)
+        self.assertEqual({a["id"]: a["stopReason"] for a in snap["sessions"][0]["agents"]}, {"a1": None, "a2": None})
+
+    def test_compact_session_start_keeps_agents_running(self):
+        m = Model()
+        self.ev(m, "UserPromptSubmit", 0)
+        self.started(m, "a1", 1)
+        self.ev(m, "SessionStart", 50, source="compact")
+        self.assertEqual(self.agent(m, "a1")["status"], "running")
+        for src in ("startup", "clear", None):
+            m2 = Model()
+            self.ev(m2, "UserPromptSubmit", 0)
+            self.started(m2, "a1", 1)
+            kw = {"source": src} if src else {}
+            self.ev(m2, "SessionStart", 50, **kw)
+            self.assertEqual(self.agent(m2, "a1")["stopReason"], "session restarted", src)
+
+    def test_task_stop_marks_agent_stopped_by_session(self):
+        m = Model()
+        self.ev(m, "UserPromptSubmit", 0)
+        self.started(m, "a1", 1)
+        self.started(m, "a2", 2)
+        self.ev(m, "PostToolUse", 60, tool="TaskStop", stopTask="a1")
+        self.ev(m, "PostToolUse", 61, tool="TaskStop", stopTask="nope")  # unknown id: no agent is made up
+        a1, a2 = self.agent(m, "a1"), self.agent(m, "a2")
+        self.assertEqual((a1["status"], a1["stopReason"], a1["endedAt"]), ("stopped", "stopped by session", self.ms(60)))
+        self.assertEqual(a2["status"], "running")
+        self.assertEqual([a["id"] for a in m.sessions["s"]["agents"]], ["a1", "a2"])
+        # a late step doesn't revive an explicitly stopped agent; a new SubagentStart (resumed agent) does
+        self.ev(m, "PreToolUse", 62, agent="a1", tool="Read", file="x.py")
+        self.assertEqual(self.agent(m, "a1")["status"], "stopped")
+        self.ev(m, "SubagentStart", 70, agent="a1")
+        a1 = self.agent(m, "a1")
+        self.assertEqual((a1["status"], a1["stopReason"], a1["endedAt"]), ("running", None, None))
+        # a finished agent stays done
+        self.ev(m, "SubagentStop", 80, agent="a2")
+        self.ev(m, "PostToolUse", 81, tool="KillShell", stopTask="a2")
+        self.assertEqual(self.agent(m, "a2")["status"], "done")
+        # the plan is untouched
+        self.assertIsNone(m.sessions["s"]["plan"])
+
+    def test_registry_moves_to_new_process_marks_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            m = Model()
+            s = self.ev(m, "UserPromptSubmit", 0)
+            self.started(m, "a1", 1)
+            s["_regProc"] = [DEAD_PID, "123"]  # the process we saw before the restart
+            _reg(d, "project-aa", os.getpid(), status="busy", upd=self.ms(50))
+            m.enrich(sessions_dir=d, now=self.ms(60))
+            a1 = self.agent(m, "a1")
+            self.assertEqual((a1["status"], a1["stopReason"]), ("stopped", "session restarted"))
+            self.assertEqual(s["_regProc"], [os.getpid(), None])
+            # same process on the next pass: nothing new happens
+            self.started(m, "a2", 70)
+            m.enrich(sessions_dir=d, now=self.ms(80))
+            self.assertEqual(self.agent(m, "a2")["status"], "running")
+
+    def test_idle_session_and_no_step_for_10_min_marks_stopped(self):
+        with tempfile.TemporaryDirectory() as d:
+            m = Model()
+            self.ev(m, "UserPromptSubmit", 0)
+            self.started(m, "a1", 1)
+            _reg(d, "x", os.getpid(), status="idle", upd=self.ms(5))
+            last = self.ms(1)
+            m.enrich(sessions_dir=d, now=last + AGENT_IDLE_MS - 1000)
+            self.assertEqual(self.agent(m, "a1")["status"], "running")  # not 10 minutes yet
+            now = last + AGENT_IDLE_MS + 1000
+            m.enrich(sessions_dir=d, now=now)
+            a1 = self.agent(m, "a1")
+            self.assertEqual((a1["status"], a1["stopReason"], a1["endedAt"]), ("stopped", "inactive", now))
+
+    def test_busy_session_keeps_quiet_agent_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            m = Model()
+            self.ev(m, "UserPromptSubmit", 0)
+            self.started(m, "a1", 1)
+            _reg(d, "x", os.getpid(), status="busy", upd=self.ms(5))
+            m.enrich(sessions_dir=d, now=self.ms(1) + 3 * AGENT_IDLE_MS)
+            self.assertEqual(self.agent(m, "a1")["status"], "running")
+
+    def test_ended_session_and_no_step_marks_stopped(self):
+        m = Model()
+        s = self.ev(m, "UserPromptSubmit", 0)
+        self.started(m, "a1", 1)
+        s["_pid"] = DEAD_PID  # process gone without SessionEnd
+        m.enrich(now=self.ms(2))
+        self.assertEqual((s["status"], self.agent(m, "a1")["status"]), ("ended", "running"))
+        m.enrich(now=self.ms(1) + AGENT_IDLE_MS + 1000)
+        self.assertEqual(self.agent(m, "a1")["stopReason"], "inactive")
+
+    def test_untitled_zero_step_agent_dropped_once_finished(self):
+        m = Model()
+        self.ev(m, "UserPromptSubmit", 0)
+        self.ev(m, "SubagentStart", 1, agent="ghost")
+        self.started(m, "a1", 1)
+        m.prune(self.ms(2))
+        self.assertIn("ghost", [a["id"] for a in m.sessions["s"]["agents"]])  # still running: kept
+        self.ev(m, "SubagentStop", 3, agent="ghost")
+        self.ev(m, "SubagentStop", 3, agent="a1")
+        m.prune(self.ms(4))
+        self.assertEqual([a["id"] for a in m.sessions["s"]["agents"]], ["a1"])
+
+    def test_prune_finished_by_time(self):
+        m = Model()
+        self.ev(m, "UserPromptSubmit", 0)
+        self.started(m, "old", 1)
+        self.started(m, "new", 2)
+        self.started(m, "run", 3)
+        self.ev(m, "SubagentStop", 10, agent="old")
+        self.ev(m, "SubagentStop", 1000, agent="new")
+        m.prune(self.ms(10) + FINISHED_TTL_MS - 1000)
+        self.assertEqual([a["id"] for a in m.sessions["s"]["agents"]], ["old", "new", "run"])
+        m.prune(self.ms(10) + FINISHED_TTL_MS + 1000)
+        self.assertEqual([a["id"] for a in m.sessions["s"]["agents"]], ["new", "run"])
+        m.prune(self.ms(10) + 10 * FINISHED_TTL_MS)
+        self.assertEqual([a["id"] for a in m.sessions["s"]["agents"]], ["run"])  # running never pruned
+
+    def test_prune_finished_by_count(self):
+        m = Model()
+        self.ev(m, "UserPromptSubmit", 0)
+        for i in range(10):
+            self.started(m, "f%d" % i, i)
+            self.ev(m, "SubagentStop", 20 + i, agent="f%d" % i)
+        for i in range(2):
+            self.started(m, "r%d" % i, 40 + i)
+        m.prune(self.ms(60))
+        ids = [a["id"] for a in m.sessions["s"]["agents"]]
+        self.assertEqual([i for i in ids if i.startswith("f")], ["f%d" % i for i in range(10 - MAX_FINISHED, 10)])
+        self.assertEqual([i for i in ids if i.startswith("r")], ["r0", "r1"])
+        # more running agents than MAX_AGENTS: the cap drops finished ones only, never a running one
+        for i in range(2, 14):
+            self.started(m, "r%d" % i, 60 + i)
+        ids = [a["id"] for a in m.sessions["s"]["agents"]]
+        self.assertEqual(ids, ["r%d" % i for i in range(14)])
+
+
+class SessionNameTest(unittest.TestCase):
+    def sess(self, reg=None, plan_title=None, project=None):
+        s = {"id": "s", "project": project, "plan": {"title": plan_title} if plan_title else None}
+        if reg is not None:
+            s["_reg"] = reg
+        return s
+
+    def test_derived_name_pattern(self):
+        self.assertTrue(is_derived_name("project-aa", "project"))
+        self.assertTrue(is_derived_name("project-2c"))
+        self.assertFalse(is_derived_name("project-aa", "crew-hub"))
+        self.assertFalse(is_derived_name("Crew Hub design proposal"))
+        self.assertFalse(is_derived_name("TrueNAS"))
+
+    def test_order(self):
+        reg = {"name": "Home Assistant Mr Manager", "source": "user", "former": "Old", "cwd": "project"}
+        self.assertEqual(display_name(self.sess(reg, "NerveOS: x")), ("Home Assistant Mr Manager",) * 2)
+        reg = {"name": "Jellyfin app", "source": "auto", "former": None, "cwd": "project"}
+        self.assertEqual(display_name(self.sess(reg))[0], "Jellyfin app")
+        # derived registry name: newest human former name
+        reg = {"name": "project-aa", "source": "derived", "former": "Truenas - Android Agent", "cwd": "project"}
+        self.assertEqual(display_name(self.sess(reg, "NerveOS: x")), ("Truenas - Android Agent", "project-aa"))
+        # then the plan title prefix, or the whole title
+        reg = {"name": "project-aa", "source": "derived", "former": None, "cwd": "project"}
+        self.assertEqual(display_name(self.sess(reg, "NerveOS: finish the hot menu")), ("NerveOS", "project-aa"))
+        self.assertEqual(display_name(self.sess(reg, "Jamfin disc engine"))[0], "Jamfin disc engine")
+        # then the cwd basename with the local name, or just the local name when the cwd is "project"
+        self.assertEqual(display_name(self.sess(reg)), ("project-aa", "project-aa"))
+        reg = {"name": "crew-hub-3f", "source": "derived", "former": None, "cwd": "crew-hub"}
+        self.assertEqual(display_name(self.sess(reg)), ("crew-hub (crew-hub-3f)", "crew-hub-3f"))
+        # no registry at all
+        self.assertEqual(display_name(self.sess(None, project="jamfin")), ("jamfin", None))
+        self.assertEqual(display_name(self.sess(None)), (None, None))
+        # registry without nameSource (older Claude Code): judged by the pattern
+        self.assertEqual(display_name(self.sess({"name": "live one", "cwd": None}))[0], "live one")
+        self.assertEqual(display_name(self.sess({"name": "project-ac", "cwd": None}, "P: x"))[0], "P")
+
+    def test_registry_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            m = Model()
+            m.apply({"v": 1, "ts": 1, "ev": "UserPromptSubmit", "sid": "s", "cwd": "project"})
+            _reg(d, "project-aa", os.getpid(), nameSource="derived", cwd="/home/node/project",
+                 formerNames=[{"name": "project-3c", "until": 9, "sessionId": "x"},
+                              {"name": "Older title", "until": 5, "sessionId": "y"},
+                              {"name": "Newest title", "until": 8, "sessionId": "z"}])
+            _reg(d, "Dead entry title", DEAD_PID, nameSource="auto", cwd="/home/node/project", upd=4)
+            m.enrich(sessions_dir=d)
+            s = m.sessions["s"]
+            self.assertEqual((s["name"], s["localName"]), ("Newest title", "project-aa"))
+            snap = m.snapshot(MACHINE)["sessions"][0]
+            self.assertEqual((snap["name"], snap["localName"]), ("Newest title", "project-aa"))
+            _no_internal_keys(self, snap)
+            # user rename wins
+            _reg(d, "Kitchen kiosk", os.getpid(), nameSource="user", cwd="/home/node/project")
+            m.enrich(sessions_dir=d)
+            self.assertEqual((s["name"], s["localName"]), ("Kitchen kiosk", "Kitchen kiosk"))
+            # no former names: the dead entry's auto title counts as a former name
+            _reg(d, "project-aa", os.getpid(), nameSource="derived", cwd="/home/node/project")
+            m.enrich(sessions_dir=d)
+            self.assertEqual(s["name"], "Dead entry title")
+            os.unlink(os.path.join(d, "%d.json" % DEAD_PID))
+            m.enrich(sessions_dir=d)
+            self.assertEqual(s["name"], "project-aa")
 
 
 if __name__ == "__main__":

@@ -108,6 +108,30 @@ class RedactSyntheticTest(unittest.TestCase):
         self.assertNotIn("Run the Bash command", json.dumps(rec))
         self.assertEqual((rec["desc"], rec["sat"], rec["cwd"]), ("Build it", "savvy-flow:savvy-medium", "jamfin"))
 
+    def test_task_stop_keeps_only_the_task_id(self):
+        aid = "a6bb86f0c1d2e3f4a"
+        p = self.base(hook_event_name="PostToolUse", tool_name="TaskStop",
+                      tool_input={"task_id": aid, "reason": "secret plan text"},
+                      tool_response={"message": "Stopped task running rm -rf /tmp/x", "task_type": "local_agent",
+                                     "command": "rm -rf /tmp/x"})
+        rec = red(p)
+        self.assertEqual(rec["stopTask"], aid)
+        self.assertEqual(set(rec) - {"v", "ts", "ev", "sid", "cwd", "tp", "tuid", "tool"}, {"stopTask"})
+        text = json.dumps(rec)
+        for leak in ("secret plan text", "rm -rf", "local_agent", "Stopped task"):
+            self.assertNotIn(leak, text)
+        # aliases and the deprecated shell_id
+        for tool in ("KillShell", "KillBash"):
+            rec = red(self.base(hook_event_name="PostToolUse", tool_name=tool, tool_input={"shell_id": "bash_7"}))
+            self.assertEqual(rec["stopTask"], "bash_7")
+        # not an id (free text, too long, not a string), or not a PostToolUse: nothing kept
+        for tid in ("my teammate with spaces", "x" * 101, 12345, None):
+            rec = red(self.base(hook_event_name="PostToolUse", tool_name="TaskStop", tool_input={"task_id": tid}))
+            self.assertNotIn("stopTask", rec)
+        for ev in ("PreToolUse", "PostToolUseFailure", "PermissionRequest"):
+            rec = red(self.base(hook_event_name=ev, tool_name="TaskStop", tool_input={"task_id": aid}))
+            self.assertNotIn("stopTask", rec)
+
     def test_bash_without_description(self):
         rec = red(self.base(tool_name="Bash", tool_input={"command": "curl -H 'Authorization: x' http://h"}))
         self.assertNotIn("desc", rec)

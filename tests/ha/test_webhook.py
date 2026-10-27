@@ -311,7 +311,7 @@ async def test_snapshot_reaches_websocket(hass, mqtt_mock, hass_client_no_auth, 
     assert data["status"] == "online" and data["snapshot"] == nas_snapshot and data["configured"] is True
     assert isinstance(data["receivedAt"], int)
     assert hass.states.get("binary_sensor.crew_hub_mac_online").state == "on"
-    assert hass.states.get("sensor.crew_hub_working").state == "1"
+    assert hass.states.get("sensor.crew_hub_working").state == "3"
     assert MAC_SECRET not in json.dumps(msg)
 
 

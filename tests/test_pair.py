@@ -103,6 +103,9 @@ class PairTest(unittest.TestCase):
         self.assertEqual(rc, 0, out + err)
         self.assertIn("paired as mac with 127.0.0.1", out)
         self.assertIn('"folders"', out)  # how to add a folder preset
+        self.assertIn("plan-file rule added to", out)
+        with open(os.path.join(self.home, ".claude", "CLAUDE.md")) as f:
+            self.assertEqual(f.read().count("<!-- crew-hub:plan-file -->"), 1)
         self.assert_no_echo(out + err, code, WID, SECRET, code[9:40])
         self.assertEqual(self.mode(), 0o700)
         self.assertEqual((self.mode("config.json"), self.mode("secrets.json")), (0o600, 0o600))
@@ -202,6 +205,7 @@ class PairTest(unittest.TestCase):
         self.assertEqual(rc, 2, out + err)
         self.assertIn("isn't set up for MQTT yet", err)
         self.assertIn("crew-hub-pair --mqtt", err)
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".claude", "CLAUDE.md")))  # failed: no rule
         self.assertFalse(os.path.exists(os.path.join(self.hub_dir, "secrets.json")))
         self.assert_no_echo(out + err, code, NEW_SECRET)
 

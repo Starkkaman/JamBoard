@@ -131,6 +131,44 @@ to Home Assistant over HTTPS instead, through the same public address you use fo
 - Folder presets for **New session** work as for MQTT machines (`commands.folders` in config.json, see
   [Machine side](#machine-side-crew-hubd)); restart crew-hubd after editing.
 
+## Session names, agents and plans (plugin 0.4.0)
+
+- **Session names** are human: the name you gave the session or Claude's auto title; else its newest earlier such
+  name (`formerNames` in `~/.claude/sessions/*.json`); else the plan title before the first `:` (`NerveOS: …` →
+  `NerveOS`); else the folder name with the local name, e.g. `crew-hub (crew-hub-3f)`, or just `project-aa` in
+  `~/project`. The snapshot keeps the local name in `session.localName`.
+- **Agents** are `running`, `done`, `failed` or `stopped`. `stopped` (with `endedAt` and `stopReason`) means the session
+  restarted while the agent ran (`"session restarted"`: a SessionStart from startup, resume or clear (not compaction),
+  or the session moved to a new process), the session stopped it with TaskStop (`"stopped by session"`), or the agent
+  made no step for 10 minutes while its session was idle or ended (`"inactive"`). A restarted or inactive agent that
+  makes a step again is running again; any agent that starts again (SubagentStart) is running again. Finished agents leave the card 30 minutes after they end, at most 6 per session stay
+  (newest first), and untitled agents that never made a step are dropped once finished. Running agents are never
+  dropped by count. Plan task statuses always come from the plan file.
+- **Plan file rule:** after a successful pairing, `crew-hub-pair` adds the plan-file rule to the user-level
+  `~/.claude/CLAUDE.md`, between `<!-- crew-hub:plan-file -->` and `<!-- /crew-hub:plan-file -->` (created if missing,
+  the block replaced if present, everything else kept). `crew-hub-pair --install-plan-rule` does only that (no prompts,
+  no secrets). The text is `plugins/crew-hub/templates/plan-file-rule.md`: every savvy-flow plan (and any multi-step
+  plan with agents) is also written as a whole file to `~/.claude/crew-hub/plans/<local session_id>.json`.
+
+## The card (integration 0.4.0)
+
+- **Active plans**: one paper strip per unfinished plan on any machine and session (newest first), plus plans that
+  finished in the last 10 minutes (chip "finished", bar full). Each strip shows the title, the bar, the phase,
+  "N of M accepted" and the session and machine; tapping it scrolls to that session (opening it if it is idle). More
+  than 4 plans: 4 strips and a "+N more" toggle. No plans: one "No plan running" strip.
+- **Sessions**: working and waiting sessions get full blocks. Each block lists its task queue under the summary
+  (running tasks and the next 3 queued; done tasks behind an "N done" toggle), its running agents, and its finished
+  agents (done, failed, stopped) behind an "N finished" toggle with **Clear finished**. Stopped agents show a dim
+  "stopped" chip and the stop reason; the session's local name shows in the meta row when it differs from its name.
+- **Idle sessions (N)**: idle and ended sessions, collapsed by default, one row each (name, machine, last activity,
+  one line of summary). Tap a row to open the full block with its message box; **×** dismisses the session.
+- **Dismiss is shared**: Clear finished and × call the admin-only websocket command `crew_hub/dismiss`
+  `{machine, session, agents?: [ids], session_dismissed?: bool}`. Home Assistant keeps the dismissed ids in the private
+  Store `.storage/crew_hub.dismissed` and leaves them out of what every device gets (`crew_hub/subscribe`,
+  `crew_hub/get`); commands and diagnostics still see the full snapshot. A dismissed session is hidden only while it is
+  idle or ended: when it works or waits again it comes back for good. Ids missing from the machine's snapshots for
+  24 hours are forgotten.
+
 ## Commands
 
 Admin users can act on sessions from the card. Each command is signed with the machine's command secret
@@ -205,7 +243,7 @@ without an answer, and acks every other refusal (`retained`, `stale` (more than 
 - Card source: `card/crew-hub-card.js`. After editing, run `scripts/sync-card.sh` (copies it into
   `custom_components/crew_hub/www/`; a test fails if the copies differ). Previews: `card/preview.html`,
   `card/preview-hass.html` (fake hass feed + fake command answers). Browser check of the controls:
-  `pw-node card/verify-controls.js` (writes `card/screenshots/card-controls-*.png`).
+  `pw-node card/verify-controls.js` (writes `card/screenshots/card-v040-390.png` and `card-v040-1280.png`).
 - Stdlib tests: `python3 -m unittest discover -s tests`.
 - Home Assistant tests: `/home/node/.local/opt/ha-test-venv/bin/python -m pytest tests/ha`
   (venv with `pytest-homeassistant-custom-component`, Python 3.14).

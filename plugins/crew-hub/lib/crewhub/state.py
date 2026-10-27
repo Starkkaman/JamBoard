@@ -6,15 +6,39 @@ internal (pid, transcript path, file signatures) and are never published.
 Sessions without hooks still show up through their plan file (~/.claude/crew-hub/plans/<session id>.json, see
 poll_plans): such a session carries "_fromPlan" until its first hook event, lives exactly as long as the plan file, and
 takes its status from ~/.claude/sessions/*.json while that process is alive (idle otherwise).
+
+Agent lifecycle (0.4.0): running -> done (SubagentStop, SessionEnd) | stopped. An agent is "stopped" when its session
+restarts while it runs (SessionStart with source startup/resume/clear/unknown, not compact; or the registry entry
+moving to a new process) with stopReason "session restarted", when the session stops it with TaskStop ("stopped by
+session"), or when it made no step for AGENT_IDLE_MS while its session is idle or ended ("inactive"). A step revives a
+"session restarted"/"inactive" agent; SubagentStart revives any agent. Finished agents (done/failed/stopped) disappear
+FINISHED_TTL_MS after endedAt and at most MAX_FINISHED of them are kept per session; untitled agents without steps are
+dropped once finished. Plan task statuses are never touched (the plan file is the orchestrator's truth).
+
+session.name is human (display_name): registry name when nameSource is user/auto, else the newest non-derived former
+name, else the plan title's prefix before ":", else the cwd basename plus the local name. session.localName keeps the
+registry name (e.g. "project-aa").
 """
 
 import json
 import os
+import re
 import time
 
 from . import inbox
 
 MAX_AGENTS = 12
+MAX_FINISHED = 6
+FINISHED = ("done", "failed", "stopped")
+AGENT_IDLE_MS = 10 * 60 * 1000
+FINISHED_TTL_MS = 30 * 60 * 1000
+STOP_RESTARTED = "session restarted"
+STOP_INACTIVE = "inactive"
+STOP_KILLED = "stopped by session"  # TaskStop (or its aliases) on the agent's id
+STOP_TOOLS = ("TaskStop", "KillShell", "KillBash")
+NO_RESTART_SOURCES = ("compact",)  # SessionStart after compaction: the process and its subagents live on
+HUMAN_NAME_SOURCES = ("user", "auto")
+DERIVED_RE = re.compile(r"^(.+)-[0-9a-f]{2,4}$")  # Claude Code's generated local names: "<cwd basename>-<hex>"
 TRAIL = 3
 MAX_TASKS = 50
 ENDED_TTL_MS = 3600 * 1000
@@ -194,6 +218,93 @@ def pid_alive(pid):
         return True
 
 
+def _basename(path):
+    if not isinstance(path, str) or not path.strip():
+        return None
+    b = os.path.basename(path.rstrip("/"))
+    return b[:200] or None
+
+
+def is_derived_name(name, cwd_base=None):
+    """True for names Claude Code generated itself ("project-aa"): "<cwd basename>-<2-4 hex>"."""
+    if not isinstance(name, str):
+        return False
+    m = DERIVED_RE.match(name.strip())
+    if not m:
+        return False
+    return cwd_base is None or m.group(1) == cwd_base
+
+
+def _human(name, source, cwd_base):
+    """A name worth showing: set by the user or Claude's auto-title, or (no source given) not a generated one."""
+    if not isinstance(name, str) or not name.strip():
+        return False
+    if isinstance(source, str):
+        return source in HUMAN_NAME_SOURCES
+    return not is_derived_name(name, cwd_base)
+
+
+def registry_names(best, entries):
+    """{name, source, former, cwd} from the chosen registry entry `best` and every entry of the same session id.
+
+    `former` is the newest human name among the entries' formerNames ({name, until, ...}) and the user/auto names of
+    the other (older) entries."""
+    cands = []
+    for d in entries:
+        cwd = _basename(d.get("cwd"))
+        fn = d.get("formerNames")
+        if isinstance(fn, list):
+            for e in fn[:50]:
+                if isinstance(e, dict) and _human(e.get("name"), e.get("nameSource"), cwd):
+                    until = e.get("until")
+                    cands.append((until if isinstance(until, (int, float)) else 0, e["name"].strip()[:200]))
+        if d is not best and isinstance(d.get("nameSource"), str) and _human(d.get("name"), d.get("nameSource"), cwd):
+            upd = d.get("updatedAt")
+            cands.append((upd if isinstance(upd, (int, float)) else 0, d["name"].strip()[:200]))
+    name = best.get("name")
+    src = best.get("nameSource")
+    return {
+        "name": name.strip()[:200] if isinstance(name, str) and name.strip() else None,
+        "source": src[:20] if isinstance(src, str) else None,
+        "former": max(cands)[1] if cands else None,
+        "cwd": _basename(best.get("cwd")),
+    }
+
+
+def display_name(s):
+    """(name, localName) for a session dict; see the module doc for the order."""
+    reg = s.get("_reg") or {}
+    local = reg.get("name")
+    cwd = reg.get("cwd") or (s.get("project") if isinstance(s.get("project"), str) else None)
+    if local and _human(local, reg.get("source"), cwd):
+        return local, local
+    if reg.get("former"):
+        return reg["former"], local
+    plan = s.get("plan")
+    title = plan.get("title") if isinstance(plan, dict) else None
+    if isinstance(title, str) and title.strip():
+        head = title.split(":", 1)[0].strip()
+        return (head or title.strip())[:200], local
+    if cwd and cwd != "project":
+        return ("%s (%s)" % (cwd, local) if local else cwd), local
+    return (local or cwd or None), local
+
+
+def _proc_gone(pid, proc_start):
+    """True when the process (pid, procStart) no longer runs; without /proc only the pid is checked."""
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    if os.path.isdir("/proc/self"):
+        return not inbox.entry_alive({"pid": pid, "procStart": proc_start})
+    return not pid_alive(pid)
+
+
+def _ended_key(a):
+    """When a finished agent ended (startedAt for old entries without endedAt)."""
+    v = a.get("endedAt") or a.get("startedAt") or 0
+    return v if isinstance(v, (int, float)) else 0
+
+
 def _confirmed_claude_pid(pid):
     """True only when /proc shows `pid` is a claude process (hook ppid may be a short-lived shell)."""
     try:
@@ -227,6 +338,7 @@ class Model(object):
                 "id": sid,
                 "ccr": None,
                 "name": None,
+                "localName": None,
                 "project": None,
                 "status": "idle",
                 "waiting": None,
@@ -347,16 +459,89 @@ class Model(object):
             "status": "running",
             "startedAt": at,
             "endedAt": None,
+            "stopReason": None,
             "steps": 0,
             "current": None,
             "trail": [],
         }
         s["agents"].append(a)
         if len(s["agents"]) > MAX_AGENTS:
+            # running agents are never dropped by count; the oldest finished one goes
             finished = [x for x in s["agents"] if x["status"] != "running" and x is not a]
-            victim = min(finished or [x for x in s["agents"] if x is not a], key=lambda x: x.get("startedAt") or 0)
-            s["agents"].remove(victim)
+            if finished:
+                s["agents"].remove(min(finished, key=_ended_key))
         return a
+
+    @staticmethod
+    def _revive(a):
+        """A step from a stopped agent proves it still runs (not after an explicit TaskStop: late events may race it)."""
+        if a["status"] == "stopped" and a.get("stopReason") != STOP_KILLED:
+            a["status"] = "running"
+            a["endedAt"] = None
+            a["stopReason"] = None
+
+    def _stop_running(self, s, reason, at):
+        """Mark every running agent of `s` stopped (the plan's task statuses stay as the plan file says)."""
+        hit = False
+        for a in s["agents"]:
+            if a["status"] == "running":
+                a["status"] = "stopped"
+                a["endedAt"] = at
+                a["stopReason"] = reason
+                hit = True
+        if hit:
+            self.changed = True
+        return hit
+
+    def _sweep_agents(self, s, now):
+        """Running agents without a step for AGENT_IDLE_MS while the session is idle or ended -> stopped (inactive)."""
+        reg = s.get("_regStatus")
+        quiet = s["status"] == "ended" or reg == "idle" or (reg is None and s["status"] == "idle")
+        if not quiet:
+            return False
+        hit = False
+        for a in s["agents"]:
+            if a["status"] != "running":
+                continue
+            cur = a.get("current")
+            last = max(a.get("startedAt") or 0, (cur.get("at") or 0) if isinstance(cur, dict) else 0)
+            if now - last > AGENT_IDLE_MS:
+                a["status"] = "stopped"
+                a["endedAt"] = now
+                a["stopReason"] = STOP_INACTIVE
+                hit = True
+        if hit:
+            self.changed = True
+        return hit
+
+    def _prune_agents(self, s, now):
+        """Drop finished untitled no-step agents, finished agents FINISHED_TTL_MS after endedAt, and all but the
+        MAX_FINISHED newest finished ones. Running agents are never dropped here."""
+        keep = set()
+        finished = []
+        for a in s["agents"]:
+            if a["status"] == "running":
+                keep.add(id(a))
+                continue
+            if not a.get("title") and not a.get("steps"):
+                continue
+            if now - _ended_key(a) > FINISHED_TTL_MS:
+                continue
+            finished.append(a)
+        keep.update(id(a) for a in sorted(finished, key=_ended_key, reverse=True)[:MAX_FINISHED])
+        out = [a for a in s["agents"] if id(a) in keep]
+        if len(out) != len(s["agents"]):
+            s["agents"] = out
+            self.changed = True
+
+    def _refresh_name(self, s):
+        name, local = display_name(s)
+        if (s.get("name"), s.get("localName")) != (name, local):
+            s["name"] = name
+            s["localName"] = local
+            self.changed = True
+            return True
+        return False
 
     def _task(self, s, tid, subject=None):
         for t in s["tasks"]:
@@ -404,6 +589,9 @@ class Model(object):
             self._set_status(s, "working", at)
 
         if ev == "SessionStart":
+            # startup/resume/clear (or unknown): whatever subagents were running didn't survive; compaction keeps them
+            if rec.get("source") not in NO_RESTART_SOURCES:
+                self._stop_running(s, STOP_RESTARTED, at)
             if rec.get("model"):
                 s["model"] = rec["model"]
             if s["status"] != "working":
@@ -412,11 +600,14 @@ class Model(object):
             a = self._agent(s, aid, at)
             a["type"] = rec.get("atype") or a["type"]
             a["status"] = "running"
+            a["endedAt"] = None
+            a["stopReason"] = None
         elif ev == "PreToolUse":
             if aid:
                 a = self._agent(s, aid, at)
                 if rec.get("atype") and not a["type"]:
                     a["type"] = rec["atype"]
+                self._revive(a)
                 if a["current"]:
                     a["trail"] = (a["trail"] + [a["current"]])[-TRAIL:]
                 a["current"] = {"text": step_text(rec), "at": at}
@@ -444,12 +635,19 @@ class Model(object):
                         self._task(s, rec["taskId"])["status"] = to
                 elif tool == "TodoWrite" and isinstance(rec.get("todos"), list):
                     self._todos(s, rec["todos"])
+                elif tool in STOP_TOOLS and isinstance(rec.get("stopTask"), str):
+                    for a in s["agents"]:
+                        if a["id"] == rec["stopTask"] and a["status"] in ("running", "stopped"):
+                            a["status"] = "stopped"
+                            a["endedAt"] = at
+                            a["stopReason"] = STOP_KILLED
                 if rec.get("plan"):
                     self._load_plan(rec["plan"], plan_loader, plans_dir)
         elif ev == "SubagentStop" and aid:
             a = self._agent(s, aid, at)
             a["status"] = "done"
             a["endedAt"] = at
+            a["stopReason"] = None
             if rec.get("atype") and not a["type"]:
                 a["type"] = rec["atype"]
         elif ev == "TaskCreated" and rec.get("task_id"):
@@ -484,6 +682,7 @@ class Model(object):
                 if a["status"] == "running":
                     a["status"] = "done"
                     a["endedAt"] = at
+        self._refresh_name(s)
 
     @staticmethod
     def _notification_kind(rec):
@@ -520,32 +719,35 @@ class Model(object):
                 return
             s = self._session(sid, now_ms())
             s["_fromPlan"] = True
-            s["name"] = plan.get("title") or None
         s["plan"] = plan
         s["_planSig"] = list(sig) if sig else None
+        self._refresh_name(s)
         self.changed = True
 
     # ---- enrichment ---------------------------------------------------------------------------------------------
     def enrich(self, sessions_dir=None, plans_dir=None, now=None):
         now = now or now_ms()
         if sessions_dir:
-            self._enrich_sessions_dir(sessions_dir)
+            self._enrich_sessions_dir(sessions_dir, now)
         for s in self.sessions.values():
             if s["status"] != "ended":
                 self._enrich_transcript(s)
                 self._check_alive(s, now)
                 if s.get("_reqs") and self._expire_requests(s, now):
                     self.changed = True
+            self._sweep_agents(s, now)
+            self._refresh_name(s)
         if plans_dir:
             self.poll_plans(plans_dir, sessions_dir, now)
         self.prune(now)
 
-    def _enrich_sessions_dir(self, sessions_dir):
+    def _enrich_sessions_dir(self, sessions_dir, now=None):
+        now = now or now_ms()
         try:
             names = os.listdir(sessions_dir)
         except OSError:
             return
-        best = {}
+        entries = {}  # sid -> [(alive, entry)]
         for n in names:
             if not n.endswith(".json"):
                 continue
@@ -561,24 +763,34 @@ class Model(object):
                 continue
             pid = d.get("pid")
             alive = isinstance(pid, int) and pid > 0 and pid_alive(pid)
-            if not alive and self.sessions[sid].get("_fromPlan"):
-                continue  # plan-only sessions only follow a live registry entry
-            key = (alive, d.get("updatedAt") or 0)
-            if sid not in best or key > best[sid][0]:
-                best[sid] = (key, d)
-        for sid, ((alive, _), d) in best.items():
-            s = self.sessions[sid]
-            before = (s.get("name"), s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
+            entries.setdefault(sid, []).append((alive, d))
+        for sid, s in self.sessions.items():
+            lst = entries.get(sid) or []
+            if s.get("_fromPlan"):
+                lst = [x for x in lst if x[0]]  # plan-only sessions only follow a live registry entry
+            if not lst:
+                s.pop("_regStatus", None)
+                continue
+            alive, d = max(lst, key=lambda x: (x[0], x[1].get("updatedAt") or 0))
+            before = (s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
                       len(s.get("_reqs") or []))
             s["kind"] = inbox.entry_kind(d)
             s["_inbox"] = bool(alive and inbox.inbox_ready(sessions_dir, d))
-            if isinstance(d.get("name"), str):
-                s["name"] = d["name"][:200]
+            s["_reg"] = registry_names(d, [x[1] for x in lst])
             if isinstance(d.get("bridgeSessionId"), str):
                 s["ccr"] = d["bridgeSessionId"][:100]
             if alive:
                 s["_pid"] = d["pid"]
                 s["_pidSrc"] = "sessions"
+                proc = [d["pid"], d.get("procStart")]
+                prev = s.get("_regProc")
+                if isinstance(prev, list) and len(prev) == 2 and prev != proc and _proc_gone(prev[0], prev[1]):
+                    # the session moved to a new process (restart/respawn): its old subagents are gone
+                    self._stop_running(s, STOP_RESTARTED, now)
+                s["_regProc"] = proc
+                s["_regStatus"] = d.get("status") if isinstance(d.get("status"), str) else None
+            else:
+                s.pop("_regStatus", None)
             fstat = d.get("status")
             fat = d.get("statusUpdatedAt") or d.get("updatedAt") or 0
             reqs = s.get("_reqs")
@@ -593,7 +805,8 @@ class Model(object):
                     self._set_status(s, "idle", int(fat))
                 elif fstat == "busy" and s["status"] == "idle":
                     self._set_status(s, "working", int(fat))
-            if before != (s.get("name"), s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
+            self._refresh_name(s)
+            if before != (s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
                           len(s.get("_reqs") or [])):
                 self.changed = True
 
@@ -626,9 +839,9 @@ class Model(object):
             if pid and not pid_alive(pid):
                 s.pop("_pid", None)
                 s.pop("_pidSrc", None)
+                s.pop("_regStatus", None)
                 self._set_status(s, "idle", now)
-                if s.get("plan") and s["plan"].get("title"):
-                    s["name"] = s["plan"]["title"]
+                self._refresh_name(s)
                 self.changed = True
             return
         pid = s.get("_pid")
@@ -684,8 +897,8 @@ class Model(object):
             self._refresh_plan(s, plans_dir)
             if s.get("_fromPlan") and s.get("_planSig") != before:
                 s["updatedAt"] = max(s.get("updatedAt") or 0, now)
-                if s.get("plan") and s["plan"].get("title") and not s.get("_pid"):
-                    s["name"] = s["plan"]["title"]
+            if s.get("_planSig") != before:
+                self._refresh_name(s)
         for sid in list(self._bad_plans):
             if sid not in present or sid in self.sessions:
                 del self._bad_plans[sid]
@@ -710,20 +923,21 @@ class Model(object):
         s["_fromPlan"] = True
         s["plan"] = plan
         s["_planSig"] = list(sig) if sig else None
-        s["name"] = plan.get("title") or None
         s["ccr"] = plan.get("ccrSessionId")
         reg = find_registry(sessions_dir, sid) if sessions_dir else None
         if reg and reg[0]:
             d = reg[1]
             s["_pid"] = d["pid"]
             s["_pidSrc"] = "sessions"
-            if isinstance(d.get("name"), str) and d["name"]:
-                s["name"] = d["name"][:200]
+            s["_reg"] = registry_names(d, [d])
+            s["_regStatus"] = d.get("status") if isinstance(d.get("status"), str) else None
+            s["_regProc"] = [d["pid"], d.get("procStart")]
             if isinstance(d.get("bridgeSessionId"), str):
                 s["ccr"] = d["bridgeSessionId"][:100]
             s["status"] = REGISTRY_STATUS.get(d.get("status"), "idle")
             fat = d.get("statusUpdatedAt") or d.get("updatedAt")
             s["_statusAt"] = int(fat) if isinstance(fat, (int, float)) else now
+        self._refresh_name(s)
         self.changed = True
         return s
 
@@ -734,6 +948,8 @@ class Model(object):
             if s["status"] == "ended" and now - (s.get("_endedAt") or s.get("updatedAt") or 0) > ENDED_TTL_MS:
                 del self.sessions[sid]
                 self.changed = True
+                continue
+            self._prune_agents(s, now)
 
     # ---- snapshot -----------------------------------------------------------------------------------------------
     @staticmethod
@@ -754,7 +970,8 @@ class Model(object):
     @classmethod
     def _public(cls, s, commands_active=False):
         out = {k: v for k, v in s.items() if not k.startswith("_")}
-        out["agents"] = [dict(a, trail=list(a.get("trail") or [])) for a in s["agents"]]
+        out["agents"] = [dict(a, trail=list(a.get("trail") or []), stopReason=a.get("stopReason")) for a in s["agents"]]
+        out.setdefault("localName", None)
         out["tasks"] = [dict(t) for t in s["tasks"]]
         out["kind"] = s.get("kind") or "interactive"
         out["controls"] = cls._controls(s, commands_active)

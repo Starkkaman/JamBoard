@@ -7,6 +7,8 @@ docs/DESIGN.md §1: each machine's crew-hubd publishes <prefix>/<machine>/snapsh
 Machines off the LAN use the webhook transport instead (webhook_transport.py, docs/WEBHOOK.md): one HA webhook per
 machine feeds the same store, and their commands wait in a queue for the machine's poll.
 Machine secrets (command secret, webhook id) live in a private Store, not in the config entry (secret_store.py).
+Agents and sessions dismissed from the card (crew_hub/dismiss) are filtered out of the feed and kept in another private
+Store (dismissed.py).
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from . import commands, secret_store, services, websocket
+from . import commands, dismissed, secret_store, services, websocket
 from .const import (
     CARD_FILENAME,
     CARD_URL,
@@ -36,6 +38,7 @@ from .const import (
     CONF_MACHINE_NAME,
     CONF_MACHINE_TRANSPORT,
     CONF_PREFIX,
+    DATA_DISMISSED,
     DATA_FRONTEND,
     DATA_SECRETS,
     DATA_STORE,
@@ -83,6 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> b
         store.set_prefix(prefix)
         store.set_configured(machines)
     entry.runtime_data = store
+    await dismissed.async_attach(hass, store)  # dismissed agents/sessions (crew_hub/dismiss), private Store
 
     # Webhook machines (docs/WEBHOOK.md): one webhook each; MQTT traffic under their ids is ignored.
     hooked = [
@@ -158,6 +162,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: CrewHubConfigEntry) -> 
     secrets = await secret_store.async_get_secrets(hass)
     await secrets.async_remove_file()
     hass.data.pop(DATA_SECRETS, None)
+    if (gone := hass.data.pop(DATA_DISMISSED, None)) is not None:
+        await gone.async_remove_file()
     if (hub := hass.data.pop(DATA_WEBHOOK, None)) is not None:
         hub.shutdown()
     if (store := hass.data.pop(DATA_STORE, None)) is not None:

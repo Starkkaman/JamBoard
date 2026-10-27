@@ -37,7 +37,14 @@ exposed).
      new code and pair again), `TLS certificate not trusted`, or a connection error.
    - `python3 -c 'import json,os; s=json.load(open(os.path.expanduser("~/.claude/crew-hub/snapshot.json"))); print(s["machine"]["id"], len(s["sessions"]), "sessions", "commands" in s["machine"])'`
    - The machine should show online on the Crew Hub card.
-6. **Folder presets (optional).** To start sessions from HA, add presets to `config.json` → `commands.folders`, e.g.
+6. **Plan-file rule.** Successful pairing already added it to the user-level `~/.claude/CLAUDE.md` (the tool said
+   `plan-file rule added to …` or `… is up to date`). If it didn't, or pairing was done with an older plugin, run it
+   yourself (no prompts, no secrets, safe to run through Claude):
+   `"<plugin root>/bin/crew-hub-pair" --install-plan-rule`. It is idempotent: it keeps everything in that file and only
+   adds or replaces the block between `<!-- crew-hub:plan-file -->` and `<!-- /crew-hub:plan-file -->`. Check with
+   `grep -c 'crew-hub:plan-file' ~/.claude/CLAUDE.md` (prints 2: the start and end markers). Don't edit the block by
+   hand; it is rewritten on the next install.
+7. **Folder presets (optional).** To start sessions from HA, add presets to `config.json` → `commands.folders`, e.g.
    `"folders": {"projects": {"path": "/Users/me/projects", "label": "Projects"}}`. The folder must already be trusted
    in Claude Code. You may edit `config.json` (it holds no secrets); then restart crew-hubd:
    `kill "$(cat ~/.claude/crew-hub/crew-hubd.pid)"; sleep 1; nohup "<plugin root>/bin/crew-hubd" >/dev/null 2>&1 &`

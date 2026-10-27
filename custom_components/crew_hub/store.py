@@ -1,11 +1,18 @@
 """In-memory model of every machine's latest Crew Hub snapshot.
 
 No Home Assistant imports, so it can be unit-tested with the stdlib (tests/test_store.py).
-Nothing here is persisted: retained MQTT messages rebuild the model after a restart.
+Snapshots are not persisted: retained MQTT messages rebuild the model after a restart. Dismissals (0.4.0) are kept here
+too and persisted by dismissed.py through load_dismissed()/dismissed_data()/on_dismissed_change.
 
 Model: {machineId: {"status": online|offline|unknown, "snapshot": dict|None, "receivedAt": epoch ms|None,
                     "configured": bool}}
 Events sent to listeners: {"type": "full", "machines": {...}} or {"type": "machine", "id": ..., "data": {...}}.
+
+Dismissed (0.4.0, crew_hub/dismiss from the card, shared by every device):
+{machineId: {sessionId: {"agents": [agentId], "session": bool, "seen": epoch ms, "agentSeen": {agentId: epoch ms}}}}.
+Outgoing data (events, as_dict) leaves out dismissed agents, and dismissed sessions while they are idle or ended; machine()
+stays unfiltered for commands and diagnostics. A dismissed session that turns working or waiting loses its flag (it comes
+back). Ids missing from the machine's snapshots for 24 h are pruned.
 """
 
 from __future__ import annotations
@@ -24,6 +31,11 @@ MACHINE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 STATUSES = ("online", "offline")
 MAX_WAITING_NAMES = 5
 MAX_NAME_LEN = 60
+DISMISS_TTL_MS = 24 * 3600 * 1000  # dismissed ids unseen in the machine's snapshots this long are pruned
+MAX_DISMISS_ID_LEN = 128
+MAX_DISMISS_AGENTS = 200  # per session
+MAX_DISMISS_SESSIONS = 200  # per machine
+ACTIVE_STATUSES = ("working", "waiting")  # a dismissed session in one of these is shown again (flag cleared)
 
 Listener = Callable[[dict], None]
 
@@ -51,6 +63,8 @@ class CrewStore:
         self._listeners: list[Listener] = []
         self._clock = clock
         self.active = False  # True while a config entry is loaded (set by __init__.py)
+        self._dismissed: dict[str, dict[str, dict]] = {}
+        self.on_dismissed_change: Callable[[], None] | None = None  # set by dismissed.py (schedules a save)
         if configured:
             self._configured = self._normalize_configured(configured)
 
@@ -102,6 +116,7 @@ class CrewStore:
         """Forget everything (config entry removed); subscribers get one empty "full"."""
         self._configured = {}
         self._machines.clear()
+        self._dismissed.clear()
         self._emit_full()
 
     # ---- listeners ----
@@ -129,23 +144,51 @@ class CrewStore:
         self._emit({"type": "full", "machines": self.as_dict()})
 
     # ---- views ----
-    def _view(self, mid: str) -> dict:
+    def _view(self, mid: str, public: bool = True) -> dict:
         entry = self._machines.get(mid) or {}
+        snapshot = entry.get("snapshot")
         return {
             "status": entry.get("status", "unknown"),
-            "snapshot": entry.get("snapshot"),
+            "snapshot": self._public_snapshot(mid, snapshot) if public else snapshot,
             "receivedAt": entry.get("receivedAt"),
             "configured": mid in self._configured,
         }
 
     def as_dict(self) -> dict[str, dict]:
+        """Every machine as the card sees it (dismissed agents/sessions left out)."""
         ids = list(self._configured) + [m for m in self._machines if m not in self._configured]
         return {mid: self._view(mid) for mid in ids}
 
     def machine(self, mid: str) -> dict | None:
+        """One machine, unfiltered (commands validate against the real snapshot)."""
         if mid not in self._machines and mid not in self._configured:
             return None
-        return self._view(mid)
+        return self._view(mid, public=False)
+
+    def _public_snapshot(self, mid: str, snapshot: Any) -> Any:
+        """The snapshot without dismissed agents and dismissed idle/ended sessions; the same object when nothing applies."""
+        dismissed = self._dismissed.get(mid)
+        if not dismissed or not isinstance(snapshot, dict) or not isinstance(snapshot.get("sessions"), list):
+            return snapshot
+        out: list = []
+        changed = False
+        for s in snapshot["sessions"]:
+            item = dismissed.get(s.get("id")) if isinstance(s, dict) and isinstance(s.get("id"), str) else None
+            if not item:
+                out.append(s)
+                continue
+            if item["session"] and s.get("status") not in ACTIVE_STATUSES:
+                changed = True
+                continue
+            agents = s.get("agents")
+            if item["agents"] and isinstance(agents, list):
+                gone = set(item["agents"])
+                keep = [a for a in agents if not (isinstance(a, dict) and a.get("id") in gone)]
+                if len(keep) != len(agents):
+                    s = {**s, "agents": keep}
+                    changed = True
+            out.append(s)
+        return {**snapshot, "sessions": out} if changed else snapshot
 
     def status(self, mid: str) -> str:
         return (self._machines.get(mid) or {}).get("status", "unknown")
@@ -170,6 +213,115 @@ class CrewStore:
 
     def any_waiting(self) -> bool:
         return any(s.get("status") == "waiting" for s in self._live_sessions())
+
+    # ---- dismissals (crew_hub/dismiss) ----
+    @staticmethod
+    def _ok_id(value: Any) -> bool:
+        return isinstance(value, str) and 0 < len(value) <= MAX_DISMISS_ID_LEN
+
+    def load_dismissed(self, data: Any) -> None:
+        """Replace the dismissals with stored data (bad items are dropped); subscribers get a "full" when it changed."""
+        clean: dict[str, dict[str, dict]] = {}
+        now = self._clock()
+        if isinstance(data, dict):
+            for mid, sessions in data.items():
+                if not (isinstance(mid, str) and MACHINE_ID_RE.match(mid)) or not isinstance(sessions, dict):
+                    continue
+                for sid, item in list(sessions.items())[:MAX_DISMISS_SESSIONS]:
+                    if not self._ok_id(sid) or not isinstance(item, dict):
+                        continue
+                    agents = [a for a in item.get("agents") or [] if self._ok_id(a)][:MAX_DISMISS_AGENTS]
+                    flag = item.get("session") is True
+                    if not agents and not flag:
+                        continue
+                    seen = item.get("seen") if isinstance(item.get("seen"), int) else now
+                    raw_seen = item.get("agentSeen") if isinstance(item.get("agentSeen"), dict) else {}
+                    agent_seen = {a: raw_seen[a] if isinstance(raw_seen.get(a), int) else seen for a in agents}
+                    clean.setdefault(mid, {})[sid] = {"agents": list(dict.fromkeys(agents)), "session": flag,
+                                                      "seen": seen, "agentSeen": agent_seen}
+        if clean == self._dismissed:
+            return
+        self._dismissed = clean
+        self._emit_full()
+
+    def dismissed_data(self) -> dict[str, dict[str, dict]]:
+        """A copy for saving."""
+        return {mid: {sid: {"agents": list(item["agents"]), "session": item["session"], "seen": item["seen"],
+                            "agentSeen": dict(item["agentSeen"])} for sid, item in sessions.items()}
+                for mid, sessions in self._dismissed.items()}
+
+    def dismiss(self, mid: str, session: str, agents: Any = None, session_dismissed: bool = False) -> str | None:
+        """Dismiss agents of a session and/or the session itself. Returns an error code, or None when accepted."""
+        if not isinstance(mid, str) or not MACHINE_ID_RE.match(mid) or (mid not in self._machines and mid not in self._configured):
+            return "unknown_machine"
+        if not self._ok_id(session):
+            return "invalid_args"
+        agents = agents or []
+        if not isinstance(agents, list) or len(agents) > MAX_DISMISS_AGENTS or not all(self._ok_id(a) for a in agents):
+            return "invalid_args"
+        if not agents and not session_dismissed:
+            return "invalid_args"
+        now = self._clock()
+        sessions = self._dismissed.setdefault(mid, {})
+        if session not in sessions and len(sessions) >= MAX_DISMISS_SESSIONS:
+            self._prune_dismissed(mid, None, now)
+            if len(sessions) >= MAX_DISMISS_SESSIONS:
+                return "too_many"
+        item = sessions.setdefault(session, {"agents": [], "session": False, "seen": now, "agentSeen": {}})
+        item["seen"] = now
+        for a in agents:
+            if a not in item["agentSeen"]:
+                item["agents"].append(a)
+            item["agentSeen"][a] = now
+        del item["agents"][:max(0, len(item["agents"]) - MAX_DISMISS_AGENTS)]
+        item["agentSeen"] = {a: item["agentSeen"][a] for a in item["agents"]}
+        if session_dismissed:
+            item["session"] = True
+        # A session that is working or waiting right now is not hidden (and keeps no flag).
+        self._prune_dismissed(mid, (self._machines.get(mid) or {}).get("snapshot"), now)
+        if self.on_dismissed_change:
+            self.on_dismissed_change()
+        self._emit({"type": "machine", "id": mid, "data": self._view(mid)})
+        return None
+
+    def _prune_dismissed(self, mid: str, snapshot: Any, now: int) -> bool:
+        """Refresh seen times from the snapshot, clear flags of active sessions, drop ids unseen for 24 h.
+        Returns True when the stored dismissals changed in a way worth saving (not for seen times alone)."""
+        sessions = self._dismissed.get(mid)
+        if not sessions:
+            return False
+        live = {s["id"]: s for s in _sessions(snapshot) if isinstance(s.get("id"), str)}
+        changed = False
+        for sid in list(sessions):
+            item = sessions[sid]
+            s = live.get(sid)
+            if s is None:
+                if now - item["seen"] > DISMISS_TTL_MS:
+                    del sessions[sid]
+                    changed = True
+                continue
+            item["seen"] = now
+            if item["session"] and s.get("status") in ACTIVE_STATUSES:
+                item["session"] = False
+                changed = True
+            present = {a.get("id") for a in s.get("agents") or [] if isinstance(a, dict)}
+            for aid in list(item["agents"]):
+                if aid in present:
+                    item["agentSeen"][aid] = now
+                elif now - item["agentSeen"].get(aid, now) > DISMISS_TTL_MS:
+                    item["agents"].remove(aid)
+                    item["agentSeen"].pop(aid, None)
+                    changed = True
+            if not item["agents"] and not item["session"]:
+                del sessions[sid]
+                changed = True
+        if not sessions:
+            del self._dismissed[mid]
+        return changed
+
+    def _snapshot_arrived(self, mid: str, snapshot: Any) -> None:
+        if mid in self._dismissed and self._prune_dismissed(mid, snapshot, self._clock()) and self.on_dismissed_change:
+            self.on_dismissed_change()
 
     # ---- webhook input (already verified by webhook_transport.py) ----
     def set_status(self, mid: str, status: str) -> bool:
@@ -202,6 +354,7 @@ class CrewStore:
         entry["snapshot"] = snapshot
         entry["receivedAt"] = self._clock()
         self._machines[mid] = entry
+        self._snapshot_arrived(mid, snapshot)
         self._emit({"type": "machine", "id": mid, "data": self._view(mid)})
         return True
 
@@ -261,6 +414,8 @@ class CrewStore:
                 return False
             entry = dict(entry or {"status": "unknown"})
             entry["snapshot"] = snapshot
+            if snapshot is not None:
+                self._snapshot_arrived(mid, snapshot)
         entry["receivedAt"] = self._clock()
         self._machines[mid] = entry
         self._emit({"type": "machine", "id": mid, "data": self._view(mid)})

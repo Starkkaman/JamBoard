@@ -85,3 +85,17 @@ def ensure_answers_dir():
     except OSError:
         pass
     return d
+
+
+def user_claude_md():
+    """~/.claude/CLAUDE.md (user-level memory; crew-hub-pair keeps one marked block in it)."""
+    return os.path.join(claude_dir(), "CLAUDE.md")
+
+
+def plugin_root():
+    """<plugin>/ (this file is <plugin>/lib/crewhub/paths.py)."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def plan_rule_template():
+    return os.path.join(plugin_root(), "templates", "plan-file-rule.md")

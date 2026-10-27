@@ -61,7 +61,8 @@ Snapshot (field names are final unless testing says otherwise):
 ```
 machine: {id, name, version, updatedAt}
 sessions: [{
-  id (local session_id), ccr (session_… id for Remote Control sessions), name, project (cwd basename),
+  id (local session_id), ccr (session_… id for Remote Control sessions), name (human, see below), localName
+  (registry name, e.g. project-aa), project (cwd basename),
   status: working | waiting | idle | ended,
   waiting?: {kind: permission | question | input, tool, text, requestId, options?},
   summary (last assistant message, first line, ≤200 chars), model, effort,
@@ -69,10 +70,17 @@ sessions: [{
   tasks: [{id, subject, status pending|in_progress|completed}],          ← TaskCreate/TaskUpdate tools
   plan?: {title, phase, done, total, finished, updatedAt,
           tasks: [{id, title, tier, status queued|running|done|failed, order, agentId, summary}]},   ← plan file
-  agents: [{id, type, title, model, status running|done|failed, startedAt, endedAt,
-            steps, current {text, at}, trail: [{text, at}] (last 3)}]
+  agents: [{id, type, title, model, status running|done|failed|stopped, startedAt, endedAt,
+            stopReason ("session restarted" | "stopped by session" | "inactive" | null), steps, current {text, at}, trail: [{text, at}] (last 3)}]
 }]
 ```
+
+0.4.0 rules (state.py): `name` = registry name when `nameSource` is user/auto, else the newest non-derived
+`formerNames` name, else the plan title before ":", else the cwd basename + " (" + localName + ")" (just localName when
+the cwd is `project`). Running agents become `stopped` on SessionStart (not source "compact") or when the registry entry moves to a new
+process ("session restarted"), on PostToolUse TaskStop/KillShell/KillBash naming their id ("stopped by session"; the
+spool keeps only `stopTask`, verified: TaskStop's task_id is the agentId, 2.1.310), or after 10 min without a step while
+the session is idle/ended ("inactive"); a step revives restarted/inactive ones, SubagentStart revives any. Finished agents go 30 min after `endedAt`, at most 6 per session; untitled zero-step ones go once finished.
 
 The card renders exactly the Crew Board v4 layout from this: the plan strip comes from `plan` (or `tasks` when there's no plan),
 session blocks from `sessions`, and agent cards from `agents`.

@@ -2,12 +2,36 @@
   "nas": {
     "status": "online",
     "machine": {
-      "id": "nas", "name": "nas", "version": "0.2.0", "updatedAt": "2026-10-26T14:29:58Z",
+      "id": "nas",
+      "name": "nas",
+      "version": "0.2.0",
+      "updatedAt": "2026-10-26T14:29:58Z",
       "commands": {
         "enabled": true,
-        "folders": [{"key": "jamfin", "label": "Jamfin"}, {"key": "crew-hub", "label": "Crew Hub"}, {"key": "home-assistant", "label": "Home Assistant"}],
-        "models": ["claude-opus-5-5", "claude-sonnet-5"],
-        "permissionModes": ["default", "acceptEdits", "auto", "plan"]
+        "folders": [
+          {
+            "key": "jamfin",
+            "label": "Jamfin"
+          },
+          {
+            "key": "crew-hub",
+            "label": "Crew Hub"
+          },
+          {
+            "key": "home-assistant",
+            "label": "Home Assistant"
+          }
+        ],
+        "models": [
+          "claude-opus-5-5",
+          "claude-sonnet-5"
+        ],
+        "permissionModes": [
+          "default",
+          "acceptEdits",
+          "auto",
+          "plan"
+        ]
       }
     },
     "sessions": [
@@ -15,80 +39,469 @@
         "id": "8c1f2a4e-3b7d-4e19-9a61-0f2d5c7b9e10",
         "ccr": "session_01BPprSFdhBQg3taJLueQEUy",
         "kind": "interactive",
-        "controls": ["send", "answer"],
+        "controls": [
+          "send",
+          "answer"
+        ],
         "name": "Jamfin",
         "project": "jamfin",
         "status": "working",
-        "summary": "Running the disc-engine plan: menu overlay and HDR10 passthrough agents are working.",
+        "summary": "Verifying the disc engine on the Hisense: 6 of 7 fixes accepted, menu overlay fix running.",
         "model": "claude-opus-5-5",
         "effort": "high",
-        "ctx": {"used": 142000, "max": 200000},
+        "ctx": {
+          "used": 142000,
+          "max": 200000
+        },
         "costUsd": 3.84,
         "startedAt": "2026-10-26T13:05:12Z",
         "updatedAt": "2026-10-26T14:29:58Z",
         "tasks": [],
         "plan": {
-          "title": "Disc engine: Blu-ray menus on the Hisense",
-          "phase": "build",
-          "done": 2,
-          "total": 5,
+          "title": "Jamfin: verify on the TV and fix",
+          "phase": "verify",
+          "done": 6,
+          "total": 7,
           "finished": false,
-          "updatedAt": "2026-10-26T14:27:40Z",
+          "updatedAt": "2026-10-26T14:28:40Z",
           "tasks": [
-            {"id": "t1", "title": "Probe libbluray build for arm64", "tier": "heavy", "status": "done", "order": 1, "agentId": "a5c1e0d2b7f94e31", "summary": "libbluray 1.3.4 builds with the NDK r27; BD-J disabled."},
-            {"id": "t2", "title": "Index sample ISOs in ~/media/Bluray", "tier": "light", "status": "done", "order": 2, "agentId": "a19b8e7c2d3f4a55", "summary": "14 ISOs indexed; 3 use BD-J menus."},
-            {"id": "t3", "title": "Menu overlay renderer (IG streams)", "tier": "careful", "status": "running", "order": 3, "agentId": "a7f3c2e1d9b84a60"},
-            {"id": "t4", "title": "HDR10 passthrough on ExoPlayer", "tier": "medium", "status": "running", "order": 4, "agentId": "a2e8d4c6b1f07a92"},
-            {"id": "t5", "title": "Remote key mapping for menus", "tier": "light", "status": "queued", "order": 5}
+            {
+              "id": "t1",
+              "title": "Probe libbluray build for arm64",
+              "tier": "heavy",
+              "status": "done",
+              "order": 1,
+              "agentId": "a5c1e0d2b7f94e31",
+              "summary": "libbluray 1.3.4 builds with the NDK r27; BD-J disabled."
+            },
+            {
+              "id": "t2",
+              "title": "Index sample ISOs in ~/media/Bluray",
+              "tier": "light",
+              "status": "done",
+              "order": 2,
+              "agentId": "a19b8e7c2d3f4a55",
+              "summary": "14 ISOs indexed; 3 use BD-J menus."
+            },
+            {
+              "id": "t3",
+              "title": "HDR10 passthrough on ExoPlayer",
+              "tier": "medium",
+              "status": "done",
+              "order": 3,
+              "agentId": "a2e8d4c6b1f07a92"
+            },
+            {
+              "id": "t4",
+              "title": "Remote key mapping for menus",
+              "tier": "light",
+              "status": "done",
+              "order": 4,
+              "agentId": "a6b0c2d4e8f13579"
+            },
+            {
+              "id": "t5",
+              "title": "Install the debug build on the TV",
+              "tier": "light",
+              "status": "done",
+              "order": 5,
+              "agentId": "a4d6f8b0c2e13579"
+            },
+            {
+              "id": "t6",
+              "title": "Audio track switch from the menu",
+              "tier": "medium",
+              "status": "done",
+              "order": 6,
+              "agentId": "a8e0a2c4e6f13579"
+            },
+            {
+              "id": "t7",
+              "title": "Menu overlay renderer (IG streams)",
+              "tier": "careful",
+              "status": "running",
+              "order": 7,
+              "agentId": "a7f3c2e1d9b84a60"
+            }
           ]
         },
         "agents": [
           {
-            "id": "a7f3c2e1d9b84a60", "type": "savvy-flow:savvy-careful", "title": "Menu overlay renderer (IG streams)",
-            "model": "claude-opus-5-5", "status": "running", "startedAt": "2026-10-26T14:12:05Z", "endedAt": null, "steps": 23,
-            "current": {"text": "Decode IG segment palette from 00001.m2ts", "at": "2026-10-26T14:29:41Z"},
+            "id": "a7f3c2e1d9b84a60",
+            "type": "savvy-flow:savvy-careful",
+            "title": "Menu overlay renderer (IG streams)",
+            "model": "claude-opus-5-5",
+            "status": "running",
+            "startedAt": "2026-10-26T14:12:05Z",
+            "endedAt": null,
+            "steps": 23,
+            "current": {
+              "text": "Decode IG segment palette from 00001.m2ts",
+              "at": "2026-10-26T14:29:41Z"
+            },
             "trail": [
-              {"text": "Read BDMV/PLAYLIST/00000.mpls", "at": "2026-10-26T14:24:10Z"},
-              {"text": "Build disc-engine module with Gradle", "at": "2026-10-26T14:26:52Z"},
-              {"text": "Run IG parser unit tests", "at": "2026-10-26T14:28:30Z"}
+              {
+                "text": "Read BDMV/PLAYLIST/00000.mpls",
+                "at": "2026-10-26T14:24:10Z"
+              },
+              {
+                "text": "Build disc-engine module with Gradle",
+                "at": "2026-10-26T14:26:52Z"
+              },
+              {
+                "text": "Run IG parser unit tests",
+                "at": "2026-10-26T14:28:30Z"
+              }
             ]
           },
           {
-            "id": "a2e8d4c6b1f07a92", "type": "savvy-flow:savvy-medium", "title": "HDR10 passthrough on ExoPlayer",
-            "model": "claude-opus-5-5", "status": "running", "startedAt": "2026-10-26T14:18:33Z", "endedAt": null, "steps": 9,
-            "current": {"text": "Check display HDR capabilities over adb", "at": "2026-10-26T14:29:12Z"},
+            "id": "a2e8d4c6b1f07a92",
+            "type": "savvy-flow:savvy-medium",
+            "title": "HDR10 passthrough on ExoPlayer",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T13:50:33Z",
+            "endedAt": "2026-10-26T14:08:12Z",
+            "steps": 9,
+            "current": {
+              "text": "Check display HDR capabilities over adb",
+              "at": "2026-10-26T14:07:58Z"
+            },
             "trail": [
-              {"text": "Sort HDR10 titles by play count and read first row", "at": "2026-10-26T14:21:02Z"},
-              {"text": "Read MediaCodec tunneling notes", "at": "2026-10-26T14:24:47Z"},
-              {"text": "Install debug APK on the TV", "at": "2026-10-26T14:27:15Z"}
-            ]
+              {
+                "text": "Sort HDR10 titles by play count and read first row",
+                "at": "2026-10-26T13:51:02Z"
+              },
+              {
+                "text": "Read MediaCodec tunneling notes",
+                "at": "2026-10-26T13:54:47Z"
+              },
+              {
+                "text": "Install debug APK on the TV",
+                "at": "2026-10-26T13:57:15Z"
+              }
+            ],
+            "summary": "HDR10 passes through with tunneling on; Dolby Vision falls back to HDR10."
           },
           {
-            "id": "a19b8e7c2d3f4a55", "type": "savvy-flow:savvy-light", "title": "Index sample ISOs in ~/media/Bluray",
-            "model": "claude-opus-5-5", "status": "done", "startedAt": "2026-10-26T13:41:20Z", "endedAt": "2026-10-26T13:42:01Z", "steps": 4,
+            "id": "a19b8e7c2d3f4a55",
+            "type": "savvy-flow:savvy-light",
+            "title": "Index sample ISOs in ~/media/Bluray",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T13:41:20Z",
+            "endedAt": "2026-10-26T13:42:01Z",
+            "steps": 4,
             "summary": "14 ISOs indexed; 3 use BD-J menus, 11 use HDMV IG menus.",
-            "current": {"text": "Write index to fixtures/discs.json", "at": "2026-10-26T13:41:58Z"},
+            "current": {
+              "text": "Write index to fixtures/discs.json",
+              "at": "2026-10-26T13:41:58Z"
+            },
             "trail": [
-              {"text": "List ISO files under ~/media/Bluray", "at": "2026-10-26T13:41:25Z"},
-              {"text": "Read index.bdmv from each ISO", "at": "2026-10-26T13:41:44Z"},
-              {"text": "Write index to fixtures/discs.json", "at": "2026-10-26T13:41:58Z"}
+              {
+                "text": "List ISO files under ~/media/Bluray",
+                "at": "2026-10-26T13:41:25Z"
+              },
+              {
+                "text": "Read index.bdmv from each ISO",
+                "at": "2026-10-26T13:41:44Z"
+              },
+              {
+                "text": "Write index to fixtures/discs.json",
+                "at": "2026-10-26T13:41:58Z"
+              }
             ]
+          },
+          {
+            "id": "a5c1e0d2b7f94e31",
+            "type": "savvy-flow:savvy-heavy",
+            "title": "Probe libbluray build for arm64",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T13:20:02Z",
+            "endedAt": "2026-10-26T13:38:45Z",
+            "steps": 31,
+            "summary": "libbluray 1.3.4 builds with the NDK r27; BD-J disabled.",
+            "trail": []
+          },
+          {
+            "id": "a6b0c2d4e8f13579",
+            "type": "savvy-flow:savvy-light",
+            "title": "Remote key mapping for menus",
+            "model": "claude-opus-5-5",
+            "status": "stopped",
+            "startedAt": "2026-10-26T13:44:10Z",
+            "endedAt": "2026-10-26T13:52:30Z",
+            "steps": 7,
+            "stopReason": "session restarted",
+            "trail": []
+          },
+          {
+            "id": "a4d6f8b0c2e13579",
+            "type": "savvy-flow:savvy-light",
+            "title": "Install the debug build on the TV",
+            "model": "claude-opus-5-5",
+            "status": "failed",
+            "startedAt": "2026-10-26T13:58:00Z",
+            "endedAt": "2026-10-26T14:01:20Z",
+            "steps": 6,
+            "summary": "adb refused: the TV's wireless debugging pairing expired.",
+            "trail": []
+          },
+          {
+            "id": "a8e0a2c4e6f13579",
+            "type": "savvy-flow:savvy-medium",
+            "title": "Audio track switch from the menu",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T14:02:00Z",
+            "endedAt": "2026-10-26T14:11:40Z",
+            "steps": 12,
+            "summary": "Audio stream switch wired to the IG button commands.",
+            "trail": []
+          },
+          {
+            "id": "a0c0ffee00000001",
+            "type": "general-purpose",
+            "title": null,
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T14:00:00Z",
+            "endedAt": "2026-10-26T14:00:01Z",
+            "steps": 0,
+            "trail": []
+          }
+        ],
+        "localName": "project-ac"
+      },
+      {
+        "id": "3f7d1c92-6e4a-4b08-9c15-7a2e5b8d0f43",
+        "ccr": "session_01NerveOSResumeStopped",
+        "kind": "interactive",
+        "controls": [
+          "send",
+          "answer"
+        ],
+        "name": "NerveOS: resume stopped agent work",
+        "localName": "project-4f",
+        "project": "nerveos",
+        "status": "working",
+        "summary": "Two agents stopped when the session restarted; re-running the sensor bridge first.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "ctx": {
+          "used": 88000,
+          "max": 200000
+        },
+        "costUsd": 1.92,
+        "startedAt": "2026-10-26T13:30:00Z",
+        "updatedAt": "2026-10-26T14:29:30Z",
+        "tasks": [],
+        "plan": {
+          "title": "NerveOS: resume stopped agent work",
+          "phase": "build",
+          "done": 1,
+          "total": 4,
+          "finished": false,
+          "updatedAt": "2026-10-26T14:29:20Z",
+          "tasks": [
+            {
+              "id": "n1",
+              "title": "Audit what the stopped agents left behind",
+              "tier": "light",
+              "status": "done",
+              "order": 1,
+              "agentId": "b1a2c3d4e5f60718"
+            },
+            {
+              "id": "n2",
+              "title": "Sensor bridge: MQTT discovery for the hub",
+              "tier": "medium",
+              "status": "running",
+              "order": 2,
+              "agentId": "b2c3d4e5f6071829"
+            },
+            {
+              "id": "n3",
+              "title": "Battery report every 15 min",
+              "tier": "light",
+              "status": "queued",
+              "order": 3
+            },
+            {
+              "id": "n4",
+              "title": "Retain-flag audit on command topics",
+              "tier": "careful",
+              "status": "queued",
+              "order": 4
+            }
+          ]
+        },
+        "agents": [
+          {
+            "id": "b2c3d4e5f6071829",
+            "type": "savvy-flow:savvy-medium",
+            "title": "Sensor bridge: MQTT discovery for the hub",
+            "model": "claude-opus-5-5",
+            "status": "running",
+            "startedAt": "2026-10-26T14:15:00Z",
+            "endedAt": null,
+            "steps": 14,
+            "current": {
+              "text": "Publish discovery config for the light sensor",
+              "at": "2026-10-26T14:29:25Z"
+            },
+            "trail": [
+              {
+                "text": "Read the old bridge's config",
+                "at": "2026-10-26T14:18:00Z"
+              },
+              {
+                "text": "Run the bridge unit tests",
+                "at": "2026-10-26T14:24:40Z"
+              }
+            ]
+          },
+          {
+            "id": "b1a2c3d4e5f60718",
+            "type": "savvy-flow:savvy-light",
+            "title": "Audit what the stopped agents left behind",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T14:01:00Z",
+            "endedAt": "2026-10-26T14:12:30Z",
+            "steps": 9,
+            "summary": "Bridge half-written, battery task untouched; nothing to roll back.",
+            "trail": []
+          },
+          {
+            "id": "b3d4e5f607182930",
+            "type": "savvy-flow:savvy-medium",
+            "title": "Sensor bridge (first try)",
+            "model": "claude-opus-5-5",
+            "status": "stopped",
+            "startedAt": "2026-10-26T13:35:00Z",
+            "endedAt": "2026-10-26T13:58:10Z",
+            "steps": 21,
+            "stopReason": "Remote Control session restarted",
+            "trail": []
+          },
+          {
+            "id": "b4e5f60718293041",
+            "type": "savvy-flow:savvy-light",
+            "title": "Battery report every 15 min (first try)",
+            "model": "claude-opus-5-5",
+            "status": "stopped",
+            "startedAt": "2026-10-26T13:36:00Z",
+            "endedAt": "2026-10-26T13:58:10Z",
+            "steps": 3,
+            "stopReason": "Remote Control session restarted",
+            "trail": []
           }
         ]
+      },
+      {
+        "id": "b8e41f03-2c6a-47d9-8e15-3a90c6d2f7e1",
+        "ccr": null,
+        "kind": "bg",
+        "controls": [
+          "send",
+          "answer",
+          "interrupt",
+          "stop"
+        ],
+        "name": "Crew Hub",
+        "project": "crew-hub",
+        "status": "working",
+        "summary": "Card v0.4.0: active plans stack, idle section and clear finished.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "ctx": {
+          "used": 64000,
+          "max": 200000
+        },
+        "costUsd": null,
+        "startedAt": "2026-10-26T11:50:00Z",
+        "updatedAt": "2026-10-26T14:29:50Z",
+        "tasks": [
+          {
+            "id": "1",
+            "subject": "Write the snapshot fixture",
+            "status": "completed"
+          },
+          {
+            "id": "2",
+            "subject": "Build the Lovelace card",
+            "status": "in_progress"
+          },
+          {
+            "id": "3",
+            "subject": "Draft the crew_hub integration",
+            "status": "pending"
+          }
+        ],
+        "agents": [
+          {
+            "id": "c1d2e3f405162738",
+            "type": "savvy-flow:savvy-careful",
+            "title": "Card + integration UX fixes 0.4.0",
+            "model": "claude-opus-5-5",
+            "status": "running",
+            "startedAt": "2026-10-26T14:05:00Z",
+            "endedAt": null,
+            "steps": 48,
+            "current": {
+              "text": "Run the card checks in Playwright",
+              "at": "2026-10-26T14:29:44Z"
+            },
+            "trail": [
+              {
+                "text": "Add crew_hub/dismiss websocket",
+                "at": "2026-10-26T14:20:00Z"
+              }
+            ]
+          },
+          {
+            "id": "c2e3f40516273849",
+            "type": "savvy-flow:savvy-medium",
+            "title": "Reporter: human session names",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T13:40:00Z",
+            "endedAt": "2026-10-26T14:02:00Z",
+            "steps": 26,
+            "summary": "Daemon sends the CCR title as the session name.",
+            "trail": []
+          }
+        ],
+        "localName": "project-c1"
       },
       {
         "id": "4d2b9c71-8a0e-4f3b-b5d6-91c7e2a0f4b8",
         "ccr": "session_012zoHCHE3a15umwYuRC4XwL",
         "kind": "interactive",
-        "controls": ["send", "answer"],
+        "controls": [
+          "send",
+          "answer"
+        ],
         "name": "Home Assistant Mr Manager",
         "project": "home-assistant",
         "status": "waiting",
-        "waiting": {"kind": "permission", "tool": "Bash", "text": "Reconnect adb to the Hisense TV", "requestId": "req_7f31a2", "since": "2026-10-26T14:26:30Z", "hubCanAnswer": true},
+        "waiting": {
+          "kind": "permission",
+          "tool": "Bash",
+          "text": "Reconnect adb to the Hisense TV",
+          "requestId": "req_7f31a2",
+          "since": "2026-10-26T14:26:30Z",
+          "hubCanAnswer": true
+        },
         "summary": "Checking why the TV's picture-mode entity went unavailable after the reboot.",
         "model": "claude-opus-5-5",
         "effort": "medium",
-        "ctx": {"used": 181500, "max": 200000},
+        "ctx": {
+          "used": 181500,
+          "max": 200000
+        },
         "costUsd": 1.27,
         "startedAt": "2026-10-26T12:40:00Z",
         "updatedAt": "2026-10-26T14:26:30Z",
@@ -99,19 +512,41 @@
         "id": "6a0e7d52-1f84-4c3b-9d27-58b1e3c4a9f6",
         "ccr": null,
         "kind": "bg",
-        "controls": ["send", "answer", "interrupt", "stop"],
+        "controls": [
+          "send",
+          "answer",
+          "interrupt",
+          "stop"
+        ],
         "name": "Music Assistant tidy-up",
         "project": "pi-sendspin",
         "status": "waiting",
         "waiting": {
-          "kind": "question", "tool": "AskUserQuestion", "text": "Which player should stay the default?", "requestId": "req_c41d09",
-          "since": "2026-10-26T14:28:10Z", "hubCanAnswer": true,
-          "questions": [{"question": "Which player should stay the default?", "header": "Player", "multiSelect": false, "options": ["Kitchen Pi", "OnePlus 5T"]}]
+          "kind": "question",
+          "tool": "AskUserQuestion",
+          "text": "Which player should stay the default?",
+          "requestId": "req_c41d09",
+          "since": "2026-10-26T14:28:10Z",
+          "hubCanAnswer": true,
+          "questions": [
+            {
+              "question": "Which player should stay the default?",
+              "header": "Player",
+              "multiSelect": false,
+              "options": [
+                "Kitchen Pi",
+                "OnePlus 5T"
+              ]
+            }
+          ]
         },
         "summary": "Cleaning up duplicate Sendspin players in Music Assistant.",
         "model": "claude-sonnet-5",
         "effort": "medium",
-        "ctx": {"used": 38000, "max": 200000},
+        "ctx": {
+          "used": 38000,
+          "max": 200000
+        },
         "costUsd": 0.41,
         "startedAt": "2026-10-26T14:02:00Z",
         "updatedAt": "2026-10-26T14:28:10Z",
@@ -122,14 +557,21 @@
         "id": "e5c7a913-0b2d-4f6e-8a14-c3d5e7f9a1b2",
         "ccr": null,
         "kind": "bg",
-        "controls": ["send", "interrupt", "stop"],
+        "controls": [
+          "send",
+          "interrupt",
+          "stop"
+        ],
         "name": "error demo",
         "project": "crew-hub",
         "status": "idle",
         "summary": "Preview only: every command to this session comes back with an error.",
         "model": "claude-opus-5-5",
         "effort": "low",
-        "ctx": {"used": 12000, "max": 200000},
+        "ctx": {
+          "used": 12000,
+          "max": 200000
+        },
         "costUsd": 0.05,
         "startedAt": "2026-10-26T13:00:00Z",
         "updatedAt": "2026-10-26T13:10:00Z",
@@ -137,32 +579,220 @@
         "agents": []
       },
       {
-        "id": "b8e41f03-2c6a-47d9-8e15-3a90c6d2f7e1",
+        "id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
         "ccr": null,
         "kind": "bg",
-        "controls": ["send", "answer", "interrupt", "stop"],
-        "name": "Crew Hub",
-        "project": "crew-hub",
-        "status": "idle",
-        "summary": "Card scaffold ready; next is the HA integration once the batch is approved.",
-        "model": "claude-opus-5-5",
-        "effort": "high",
-        "ctx": {"used": 64000, "max": 200000},
-        "costUsd": null,
-        "startedAt": "2026-10-26T11:50:00Z",
-        "updatedAt": "2026-10-26T14:18:00Z",
-        "tasks": [
-          {"id": "1", "subject": "Write the snapshot fixture", "status": "completed"},
-          {"id": "2", "subject": "Build the Lovelace card", "status": "in_progress"},
-          {"id": "3", "subject": "Draft the crew_hub integration", "status": "pending"}
+        "controls": [
+          "send",
+          "interrupt",
+          "stop"
         ],
+        "name": "Echo Show kiosk",
+        "project": "echo-show-kiosk",
+        "status": "idle",
+        "summary": "ShowKiosk 1.4 installed; watchdog restart verified overnight.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {
+          "used": 40000,
+          "max": 200000
+        },
+        "costUsd": 0.5,
+        "startedAt": "2026-10-26T09:00:00Z",
+        "updatedAt": "2026-10-26T13:20:00Z",
+        "tasks": [],
         "agents": []
+      },
+      {
+        "id": "1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e",
+        "ccr": null,
+        "kind": "bg",
+        "controls": [
+          "send",
+          "interrupt",
+          "stop"
+        ],
+        "name": "Sendspin Speaker",
+        "project": "sendspin-android",
+        "status": "idle",
+        "summary": "Buffer set to 2000 ms; drift under 5 ms over an hour.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {
+          "used": 40000,
+          "max": 200000
+        },
+        "costUsd": 0.5,
+        "startedAt": "2026-10-26T09:00:00Z",
+        "updatedAt": "2026-10-26T12:55:00Z",
+        "tasks": [],
+        "agents": []
+      },
+      {
+        "id": "2c3d4e5f-6a7b-4c8d-0e9f-1a2b3c4d5e6f",
+        "ccr": null,
+        "kind": "bg",
+        "controls": [
+          "send",
+          "interrupt",
+          "stop"
+        ],
+        "name": "Retro frontend",
+        "project": "retro-frontend",
+        "status": "idle",
+        "summary": "Moonlight tile and controller navigation merged.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {
+          "used": 40000,
+          "max": 200000
+        },
+        "costUsd": 0.5,
+        "startedAt": "2026-10-26T09:00:00Z",
+        "updatedAt": "2026-10-26T12:10:00Z",
+        "tasks": [],
+        "agents": [
+          {
+            "id": "d1e2f30415263748",
+            "type": "savvy-flow:savvy-medium",
+            "title": "Moonlight tile",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T11:30:00Z",
+            "endedAt": "2026-10-26T11:52:00Z",
+            "steps": 18,
+            "summary": "Tile launches Moonlight with the Aero host.",
+            "trail": []
+          },
+          {
+            "id": "d2f3041526374859",
+            "type": "savvy-flow:savvy-medium",
+            "title": "Controller focus ring",
+            "model": "claude-opus-5-5",
+            "status": "done",
+            "startedAt": "2026-10-26T11:31:00Z",
+            "endedAt": "2026-10-26T11:47:00Z",
+            "steps": 11,
+            "summary": "Focus ring follows the D-pad in every row.",
+            "trail": []
+          }
+        ]
+      },
+      {
+        "id": "3d4e5f6a-7b8c-4d9e-1f0a-2b3c4d5e6f7a",
+        "ccr": null,
+        "kind": "bg",
+        "controls": [
+          "send",
+          "interrupt",
+          "stop"
+        ],
+        "name": "Flicker meter",
+        "project": "flicker-meter",
+        "status": "idle",
+        "summary": "Rolling-shutter maths fixed for the 7 Pro's 60 Hz readout; plan finished.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {
+          "used": 40000,
+          "max": 200000
+        },
+        "costUsd": 0.5,
+        "startedAt": "2026-10-26T09:00:00Z",
+        "updatedAt": "2026-10-26T14:26:00Z",
+        "tasks": [],
+        "agents": [],
+        "plan": {
+          "title": "Flicker meter: 7 Pro readout fix",
+          "phase": "finished",
+          "done": 3,
+          "total": 3,
+          "finished": true,
+          "updatedAt": "2026-10-26T14:25:30Z",
+          "tasks": [
+            {
+              "id": "f1",
+              "title": "Measure readout time",
+              "tier": "light",
+              "status": "done",
+              "order": 1
+            },
+            {
+              "id": "f2",
+              "title": "Fix the band maths",
+              "tier": "medium",
+              "status": "done",
+              "order": 2
+            },
+            {
+              "id": "f3",
+              "title": "Re-test on the 3T",
+              "tier": "light",
+              "status": "done",
+              "order": 3
+            }
+          ]
+        }
+      },
+      {
+        "id": "4e5f6a7b-8c9d-4e0f-2a1b-3c4d5e6f7a8b",
+        "ccr": null,
+        "kind": "bg",
+        "controls": [
+          "send",
+          "interrupt",
+          "stop"
+        ],
+        "name": "Aero 15 steambox",
+        "project": "aero15-steambox",
+        "status": "idle",
+        "summary": "Suspend test passed 5 of 5; WoL resume still to repeat.",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "ctx": {
+          "used": 40000,
+          "max": 200000
+        },
+        "costUsd": 0.5,
+        "startedAt": "2026-10-26T09:00:00Z",
+        "updatedAt": "2026-10-26T12:15:00Z",
+        "tasks": [],
+        "agents": [],
+        "plan": {
+          "title": "Aero 15: sleep and wake",
+          "phase": "finished",
+          "done": 2,
+          "total": 2,
+          "finished": true,
+          "updatedAt": "2026-10-26T12:12:00Z",
+          "tasks": [
+            {
+              "id": "s1",
+              "title": "s2idle loop test",
+              "tier": "light",
+              "status": "done",
+              "order": 1
+            },
+            {
+              "id": "s2",
+              "title": "WoL resume",
+              "tier": "light",
+              "status": "done",
+              "order": 2
+            }
+          ]
+        }
       }
     ]
   },
   "mac": {
     "status": "offline",
-    "machine": {"id": "mac", "name": "mac", "version": "0.1.0", "updatedAt": "2026-10-26T13:52:10Z"},
+    "machine": {
+      "id": "mac",
+      "name": "mac",
+      "version": "0.1.0",
+      "updatedAt": "2026-10-26T13:52:10Z"
+    },
     "sessions": [
       {
         "id": "f0a3c5e7-9b1d-4c2e-a6f8-0d1e2f3a4b5c",
@@ -173,7 +803,10 @@
         "summary": "PadKiosk v0.1.1 built and installed; black screen on wake fixed.",
         "model": "claude-opus-5-5",
         "effort": "medium",
-        "ctx": {"used": 98000, "max": 200000},
+        "ctx": {
+          "used": 98000,
+          "max": 200000
+        },
         "costUsd": 2.06,
         "startedAt": "2026-10-26T10:15:00Z",
         "updatedAt": "2026-10-26T13:51:40Z",

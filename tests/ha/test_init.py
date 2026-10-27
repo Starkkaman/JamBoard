@@ -199,7 +199,7 @@ async def test_entities_follow_mqtt(hass: HomeAssistant, mqtt_mock, nas_snapshot
     async_fire_mqtt_message(hass, "crew/nas/snapshot", json.dumps(nas_snapshot))
     await hass.async_block_till_done()
     assert hass.states.get("binary_sensor.crew_hub_nas_online").state == "on"
-    assert hass.states.get("sensor.crew_hub_working").state == "1"
+    assert hass.states.get("sensor.crew_hub_working").state == "3"
     needs = hass.states.get("binary_sensor.crew_hub_needs_me")
     assert needs.state == "on"
     assert needs.attributes["sessions"] == ["Home Assistant Mr Manager", "Music Assistant tidy-up"]

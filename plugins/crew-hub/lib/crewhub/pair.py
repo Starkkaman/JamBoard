@@ -10,6 +10,9 @@ Pairing code (hidden input; docs/WEBHOOK.md "Pairing"). Its "t" says which kind 
 --mqtt (LAN machines): asks for the broker host, port, username, password (hidden), machine id and command secret
 (hidden), writes the same two files with transport mqtt, then restarts crew-hubd.
 
+After a successful pairing, and alone with --install-plan-rule (no prompts, no secrets: safe to run through Claude),
+it adds or refreshes the Crew Hub plan-file rule block in the user-level ~/.claude/CLAUDE.md (planrule.py).
+
 Never prints, logs or echoes the code or a secret. --stdin reads the same answers from stdin, one per line (tests).
 """
 
@@ -337,17 +340,43 @@ for example: "folders": {"projects": {"path": "/Users/you/projects", "label": "P
 (the folder must be trusted in Claude Code: open Claude there once). Restart crew-hubd after editing."""
 
 
+def install_plan_rule(out):
+    """Add/refresh the plan-file rule in ~/.claude/CLAUDE.md. Never fatal for pairing; returns success."""
+    from . import planrule
+
+    where = paths.user_claude_md()
+    try:
+        result = planrule.install()
+    except planrule.RuleError as e:
+        sys.stderr.write("crew-hub-pair: plan-file rule not installed: %s\n" % e)
+        return False
+    except (OSError, UnicodeError) as e:
+        sys.stderr.write("crew-hub-pair: plan-file rule not installed (%s: %s)\n" % (type(e).__name__, e))
+        return False
+    if result == "unchanged":
+        out("plan-file rule in %s is up to date" % where)
+    else:
+        out("plan-file rule %s %s" % ("added to" if result == "added" else "updated in", where))
+    return True
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="crew-hub-pair", description="Pair this machine with the Home Assistant Crew Hub.")
     ap.add_argument("--mqtt", action="store_true", help="LAN machine: use the MQTT broker instead of a pairing code")
     ap.add_argument("--name", help="display name for this machine (default: the hostname)")
     ap.add_argument("--stdin", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-daemon", action="store_true", help="don't start or restart crew-hubd")
+    ap.add_argument("--install-plan-rule", action="store_true",
+                    help="only add or refresh the plan-file rule in ~/.claude/CLAUDE.md (no pairing; also done after "
+                         "every successful pairing)")
     args = ap.parse_args(argv)
 
     def out(msg):
         sys.stdout.write(msg + "\n")
         sys.stdout.flush()
+
+    if args.install_plan_rule:
+        return 0 if install_plan_rule(out) else 1
 
     prompter = Prompter(args.stdin)
     try:
@@ -363,4 +392,6 @@ def main(argv=None):
         out(FOLDER_HELP)
     if not args.no_daemon:
         restart_daemon(out)
+    if ok:
+        install_plan_rule(out)
     return 0 if ok else 1

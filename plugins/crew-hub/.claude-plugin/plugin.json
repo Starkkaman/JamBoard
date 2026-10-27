@@ -1,6 +1,6 @@
 {
   "name": "crew-hub",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Reports every session, agent, task and plan on this machine to a local snapshot and (optionally) MQTT or an HTTPS webhook for the Home Assistant Crew Hub. Hooks only: zero tokens, no output.",
   "author": { "name": "Isaac" },
   "license": "MIT"

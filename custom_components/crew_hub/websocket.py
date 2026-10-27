@@ -3,6 +3,8 @@
 crew_hub/subscribe: result, then {"type": "full", "machines": {...}}, then {"type": "machine", "id", "data"} per change.
 crew_hub/get: the full machine map as the result.
 crew_hub/command: {machine, action, args} -> signed command over MQTT or the webhook queue (commands.py); result {ok, error?, result?}.
+crew_hub/dismiss: {machine, session, agents?: [ids], session_dismissed?: bool} -> hides those agents / that idle or ended
+session for every subscriber (store.py filters, dismissed.py persists); result {ok, error?}.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .commands import async_send_command
-from .const import DATA_STORE, WS_COMMAND, WS_GET, WS_SUBSCRIBE
+from .const import DATA_DISMISSED, DATA_STORE, WS_COMMAND, WS_DISMISS, WS_GET, WS_SUBSCRIBE
 from .store import CrewStore
 
 
@@ -24,6 +26,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_command)
+    websocket_api.async_register_command(hass, ws_dismiss)
 
 
 def _store(hass: HomeAssistant) -> CrewStore | None:
@@ -75,3 +78,27 @@ async def ws_command(hass: HomeAssistant, connection: websocket_api.ActiveConnec
         return
     result = await async_send_command(hass, msg["machine"], msg["action"], msg["args"])
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): WS_DISMISS,
+    vol.Required("machine"): str,
+    vol.Required("session"): str,
+    vol.Optional("agents", default=list): [str],
+    vol.Optional("session_dismissed", default=False): bool,
+})
+@websocket_api.async_response
+async def ws_dismiss(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Saved before the result, so a dismissal survives a restart right after the tap."""
+    store = _store(hass)
+    if store is None:
+        connection.send_error(msg["id"], "not_loaded", "Crew Hub is not set up")
+        return
+    error = store.dismiss(msg["machine"], msg["session"], msg["agents"], msg["session_dismissed"])
+    if error:
+        connection.send_result(msg["id"], {"ok": False, "error": error})
+        return
+    if (dismissed := hass.data.get(DATA_DISMISSED)) is not None:
+        await dismissed.async_save()
+    connection.send_result(msg["id"], {"ok": True})

@@ -13,6 +13,8 @@
 // Fake hass for the integration feed: connection.subscribeMessage answers crew_hub/subscribe with the fixture as a
 // "full" message (store shape), then a "machine" update for nas after 2 s and every second after that (like crew-hubd).
 // sendMessagePromise answers crew_hub/command after 600 ms: {ok: true}, or an error for the session named "error demo".
+// crew_hub/dismiss is answered after 300 ms with {ok: true} and, like the integration's store, the machine is pushed again
+// without the dismissed agents (and dismissed sessions while idle/ended); window.__dismissed records the requests.
 // ?refuse=1 makes the subscription fail the way a non-admin user or a missing integration does.
 const FIXTURE_NOW = Date.parse("2026-10-26T14:30:00Z");
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
@@ -25,12 +27,37 @@ function shift(v, delta) {
 const params = new URLSearchParams(location.search);
 window.__feed = {subscribes: 0, unsubscribes: 0, updateSent: false, updates: 0};
 window.__cmds = [];
+window.__dismissed = [];
+const dismissed = {};  // machine -> session -> {agents: Set, session: bool}
+function publicView(id, view) {
+  const d = dismissed[id];
+  if (!d || !view.snapshot) return view;
+  const sessions = [];
+  for (const s of view.snapshot.sessions || []) {
+    const it = d[s.id];
+    if (!it) { sessions.push(s); continue; }
+    if (it.session && s.status !== "working" && s.status !== "waiting") continue;
+    sessions.push(Object.assign({}, s, {agents: (s.agents || []).filter(a => !it.agents.has(a.id))}));
+  }
+  return Object.assign({}, view, {snapshot: Object.assign({}, view.snapshot, {sessions})});
+}
 
 class FakeConnection {
   constructor(fixture) { this.fixture = fixture; this.listeners = {}; }
   addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
   removeEventListener(t, f) { this.listeners[t] = (this.listeners[t] || []).filter(x => x !== f); }
   sendMessagePromise(msg) {
+    if (msg && msg.type === "crew_hub/dismiss") {
+      window.__dismissed.push(structuredClone(msg));
+      return new Promise(resolve => setTimeout(() => {
+        const it = ((dismissed[msg.machine] = dismissed[msg.machine] || {})[msg.session] = dismissed[msg.machine][msg.session]
+          || {agents: new Set(), session: false});
+        for (const a of msg.agents || []) it.agents.add(a);
+        if (msg.session_dismissed) it.session = true;
+        resolve({ok: true});
+        if (this.push) this.push(msg.machine);
+      }, 300));
+    }
     window.__cmds.push(structuredClone(msg));
     return new Promise((resolve, reject) => setTimeout(() => {
       if (!msg || msg.type !== "crew_hub/command") { reject({code: "unknown_command", message: "Unknown command."}); return; }
@@ -49,7 +76,9 @@ class FakeConnection {
       const {status, ...rest} = snap;
       machines[id] = {status: status || "unknown", snapshot: rest, receivedAt: Date.now(), configured: id !== "mac"};
     }
-    setTimeout(() => cb({type: "full", machines}), 0);
+    const pub = () => Object.fromEntries(Object.entries(machines).map(([id, v]) => [id, publicView(id, v)]));
+    this.push = id => cb({type: "machine", id, data: publicView(id, machines[id])});
+    setTimeout(() => cb({type: "full", machines: pub()}), 0);
     const update = () => {
       const nas = structuredClone(machines.nas);
       const now = new Date().toISOString();
@@ -61,7 +90,7 @@ class FakeConnection {
       nas.snapshot.machine.updatedAt = now;
       nas.receivedAt = Date.now();
       machines.nas = nas;
-      cb({type: "machine", id: "nas", data: nas});
+      cb({type: "machine", id: "nas", data: publicView("nas", nas)});
       window.__feed.updateSent = true;
       window.__feed.updates++;
     };

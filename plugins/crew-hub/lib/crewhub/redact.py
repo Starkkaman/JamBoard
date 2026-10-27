@@ -15,6 +15,8 @@ MAX_TODOS = 30
 
 FILE_TOOLS = ("Read", "Write", "Edit", "NotebookEdit", "MultiEdit")
 AGENT_TOOLS = ("Agent", "Task")
+STOP_TOOLS = ("TaskStop", "KillShell", "KillBash")  # KillShell/KillBash: TaskStop's aliases in Claude Code 2.1.310
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,100}$")
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest")
 
 
@@ -255,6 +257,13 @@ def redact(payload, ts, pid=None, plans_dir=None, summaries=True):
                     rec["model"] = model
                 if isinstance(resp.get("isAsync"), bool):
                     rec["async"] = resp["isAsync"]
+            elif tool in STOP_TOOLS and isinstance(tool_input, dict):
+                # only the stopped task's id (an agentId for background agents; shell_id is the deprecated name)
+                tid = tool_input.get("task_id")
+                if tid is None:
+                    tid = tool_input.get("shell_id")
+                if isinstance(tid, str) and TASK_ID_RE.match(tid):
+                    rec["stopTask"] = tid
             elif tool == "TaskUpdate":
                 tid = resp.get("taskId")
                 if tid is None and isinstance(tool_input, dict):
