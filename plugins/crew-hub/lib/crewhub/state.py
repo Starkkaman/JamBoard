@@ -18,6 +18,19 @@ dropped once finished. Plan task statuses are never touched (the plan file is th
 session.name is human (display_name): registry name when nameSource is user/auto, else the newest non-derived former
 name, else the plan title's prefix before ":", else the cwd basename plus the local name. session.localName keeps the
 registry name (e.g. "project-aa").
+
+Waiting (0.4.1) means "a prompt is open right now". Sources: open requests `_reqs` (PermissionRequest records with a
+requestId), a request-less prompt `_note` (Notification permission/question, or a PermissionRequest from an older
+crew-hook), and the live registry entry (~/.claude/sessions/<pid>.json status "waiting" + waitingFor). Rules:
+- Live registry says waiting: waiting (text from the newest request, else the note, else waitingFor).
+- Live registry says busy/idle/shell: a request stays only while crew-hook still holds it and the registry status didn't
+  change after the request (REQ_RESOLVED_SLACK_MS), or for REG_LAG_MS after it arrived (registry write lag); a note
+  only for REG_LAG_MS. Everything else is dropped.
+- No live registry entry: any progress event of the session (agents included) ends the waiting, except for a request
+  crew-hook still holds (only its own clears apply then); "unanswered" or a hold that ran out drops a request; requests
+  expire after NOREG_MAX_MS, notes after NOTE_MAX_MS.
+- hubCanAnswer is true only while crew-hook holds the request (hold not over, "answered"/"unanswered" not seen).
+- idle_prompt notifications ("waiting for your input") mean idle, not waiting.
 """
 
 import json
@@ -51,10 +64,21 @@ WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "SubagentStart")
 REGISTRY_STATUS = {"busy": "working", "idle": "idle"}
 SID_MAX = 100
 MAX_REQS = 8
-REQ_GRACE_MS = 15 * 1000  # a held request older than its hold + this can no longer be answered (hook gone)
+HOLD_DEFAULT_S = 55
+REQ_GRACE_MS = 2 * 1000  # a held request older than its hold + this can no longer be answered (hook gone)
 REQ_RESOLVED_SLACK_MS = 1000  # registry busy/idle this much after a request means it was answered elsewhere
+REG_LAG_MS = 3 * 1000  # the registry may not show "waiting" yet this long after a prompt opened
+NOTE_MAX_MS = 60 * 1000  # a request-less prompt without a registry entry
+NOREG_MAX_MS = 10 * 60 * 1000  # safety expiry for requests of sessions without a registry entry
 CLEAR_ALL_EVENTS = ("UserPromptSubmit", "SessionEnd")
 CLEAR_TOOL_EVENTS = ("PostToolUse", "PostToolUseFailure", "PermissionDenied")
+# Without a registry entry, any of these (from the session or its agents) ends a waiting state that no hold backs.
+PROGRESS_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied", "UserPromptSubmit",
+                   "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "Stop", "StopFailure",
+                   "SessionEnd")
+# Main-thread events that prove a prompt was left: a cached registry "waiting" older than them is stale until re-read.
+RESOLVE_EVENTS = ("PostToolUse", "PostToolUseFailure", "PermissionDenied", "UserPromptSubmit", "Stop", "StopFailure",
+                  "answered")
 
 
 def now_ms():
@@ -305,6 +329,66 @@ def _ended_key(a):
     return v if isinstance(v, (int, float)) else 0
 
 
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _had_hold(r):
+    """True when crew-hook held this request for a hub answer (older state files: guessed from holdS/hubCanAnswer)."""
+    if "_hold" in r:
+        return r["_hold"] is True
+    return _num(r.get("_holdS")) or r.get("hubCanAnswer") is True
+
+
+def _holding(r, now):
+    """True while crew-hook still polls for an answer to `r` (answers are still possible)."""
+    if r.get("_holdOver") or not _had_hold(r):
+        return False
+    if "_hold" not in r and r.get("hubCanAnswer") is False:
+        return False  # pre-0.4.1 state: unanswered or expired
+    hold = r["_holdS"] if _num(r.get("_holdS")) else HOLD_DEFAULT_S
+    return now <= (r.get("since") or 0) + hold * 1000 + REQ_GRACE_MS
+
+
+def _reg_waiting(s):
+    """The live registry entry says waiting, and no main-thread event has left a prompt since it was read."""
+    return s.get("_regStatus") == "waiting" and (s.get("_resolvedAt") or 0) <= (s.get("_regRead") or 0)
+
+
+def _req_kept(s, r, now):
+    """Whether an open request still counts (see the module doc)."""
+    reg = s.get("_regStatus")
+    if reg == "waiting":
+        return True
+    since = r.get("since") or 0
+    if reg is not None:
+        at = s.get("_regAt")
+        if _num(at) and at > since + REQ_RESOLVED_SLACK_MS:
+            return False  # Claude Code left the prompt after it opened (answered elsewhere, denied, turn cut)
+        return now - since < REG_LAG_MS or _holding(r, now)
+    if r.get("_holdOver") or (_had_hold(r) and not _holding(r, now)):
+        return False
+    return now - since <= NOREG_MAX_MS
+
+
+def _note_kept(s, note, now):
+    reg = s.get("_regStatus")
+    if reg == "waiting":
+        return True
+    age = now - (note.get("_since") or 0)
+    return age < (REG_LAG_MS if reg is not None else NOTE_MAX_MS)
+
+
+def _wait_kind(waiting_for):
+    """Registry waitingFor ("permission prompt" / "input needed") -> waiting kind."""
+    t = (waiting_for or "").lower()
+    if "permission" in t:
+        return "permission"
+    if "input" in t or "question" in t:
+        return "question"
+    return "input"
+
+
 def _confirmed_claude_pid(pid):
     """True only when /proc shows `pid` is a claude process (hook ppid may be a short-lived shell)."""
     try:
@@ -358,94 +442,151 @@ class Model(object):
         return s
 
     def _set_status(self, s, status, at):
+        """Set the session's base status; an open prompt (_pick_waiting) turns anything but "ended" into waiting."""
         if status == "ended":
             s.pop("_reqs", None)
-        reqs = s.get("_reqs")
-        if reqs and status != "ended":
-            status = "waiting"  # an open permission prompt/question outranks everything but the end
+            s.pop("_note", None)
+            w = None
+        else:
+            w = self._pick_waiting(s, at)
+        if w is not None:
+            status = "waiting"
+        elif status == "waiting":
+            status = "working"  # nothing open backs it
         if s["status"] != status:
             s["status"] = status
             s["_statusAt"] = at
-        if status != "waiting":
-            s["waiting"] = None
-        elif reqs:
-            s["waiting"] = _public_req(reqs[-1])
+        if s.get("waiting") != w:
+            s["waiting"] = w
+            self.changed = True
 
     # ---- permission prompts and questions (requestId from crew-hook) --------------------------------------------
-    def _fold_requests(self, s, ev, rec, at):
-        """Track open requests in s["_reqs"] (oldest first); the newest one is session.waiting."""
+    @staticmethod
+    def _pick_waiting(s, now):
+        """The public waiting object for what is open right now, or None (pure; see the module doc)."""
+        reqs = [r for r in s.get("_reqs") or [] if _req_kept(s, r, now)]
+        if reqs:
+            w = _public_req(reqs[-1])
+            w["hubCanAnswer"] = _holding(reqs[-1], now)
+            return w
+        note = s.get("_note")
+        if isinstance(note, dict) and _note_kept(s, note, now):
+            return _public_req(note)
+        if _reg_waiting(s):
+            wf = s.get("_regWaitingFor")
+            return {"kind": _wait_kind(wf), "tool": None, "text": wf or None}
+        return None
+
+    def _prune_waiting(self, s, now):
+        """Drop requests and the note that no longer count (never while a cached registry "waiting" is stale)."""
+        if s.get("_regStatus") == "waiting" and not _reg_waiting(s):
+            return
         reqs = s.get("_reqs") or []
-        before = len(reqs)
+        keep = [r for r in reqs if _req_kept(s, r, now)]
+        if len(keep) != len(reqs):
+            if keep:
+                s["_reqs"] = keep
+            else:
+                s.pop("_reqs", None)
+            self.changed = True
+        note = s.get("_note")
+        if note is not None and not (isinstance(note, dict) and _note_kept(s, note, now)):
+            s.pop("_note", None)
+            self.changed = True
+
+    def _refresh_waiting(self, s, now, fallback):
+        """Prune, then re-derive status/waiting; a waiting state that ended falls back to `fallback`."""
+        if s["status"] == "ended":
+            return
+        self._prune_waiting(s, now)
+        base = s["status"] if s["status"] != "waiting" else fallback
+        before = (s["status"], s.get("waiting"))
+        self._set_status(s, base, now)
+        if before != (s["status"], s.get("waiting")):
+            self.changed = True
+
+    def _fold_requests(self, s, ev, rec, at):
+        """Track open requests in s["_reqs"] (oldest first; the newest one is session.waiting) and the request-less
+        prompt s["_note"]."""
+        reqs = s.get("_reqs") or []
         aid = rec.get("agent")
         rid = rec.get("rid")
+        note = s.get("_note")
+        tool = rec.get("tool")
+        if ev in RESOLVE_EVENTS and not aid:
+            s["_resolvedAt"] = at
         if ev == "PermissionRequest" and isinstance(rid, str):
-            tool = rec.get("tool")
+            hold = rec.get("hold") is True
             w = {
                 "kind": "question" if tool == "AskUserQuestion" else "permission",
                 "requestId": rid,
                 "tool": tool,
                 "text": step_text(rec) if tool else None,
                 "since": at,
-                "hubCanAnswer": rec.get("hold") is True,
+                "hubCanAnswer": hold,
+                "_hold": hold,
             }
             if isinstance(rec.get("questions"), list):
                 w["questions"] = rec["questions"]
             if aid:
                 w["_agent"] = aid
-            if isinstance(rec.get("holdS"), (int, float)):
+            if _num(rec.get("holdS")):
                 w["_holdS"] = rec["holdS"]
             reqs = [r for r in reqs if r.get("requestId") != rid] + [w]
             reqs = reqs[-MAX_REQS:]
+            note = None
+        elif ev == "PermissionRequest":
+            # older crew-hook without request ids: a request-less prompt
+            note = {"kind": "permission", "tool": tool, "text": step_text(rec) if tool else None, "_since": at}
+        elif ev == "Notification":
+            kind = self._notification_kind(rec)
+            if kind in ("permission", "question") and not [r for r in reqs if _req_kept(s, r, at)]:
+                prev = note if isinstance(note, dict) else {}
+                note = {"kind": kind, "tool": prev.get("tool"), "text": rec.get("msg") or prev.get("text"),
+                        "_since": prev.get("_since") or at}
         elif ev == "answered" and isinstance(rid, str):
             reqs = [r for r in reqs if r.get("requestId") != rid]
         elif ev == "unanswered" and isinstance(rid, str):
-            # The hold ended but the prompt may still be open in the terminal/claude.ai: keep it, not answerable here.
+            # The hold is over: HA can't answer any more. Kept only while the registry says waiting (_req_kept).
             for r in reqs:
                 if r.get("requestId") == rid:
                     r["hubCanAnswer"] = False
+                    r["_holdOver"] = True
         elif ev in CLEAR_ALL_EVENTS or (ev in ("Stop", "StopFailure") and not aid):
             reqs = []
+            note = None
         elif ev == "SubagentStop" and aid:
             reqs = [r for r in reqs if r.get("_agent") != aid]
         elif ev in CLEAR_TOOL_EVENTS:
-            tool = rec.get("tool")
             for i, r in enumerate(reqs):
                 if r.get("tool") == tool and r.get("_agent") == aid:
                     del reqs[i]
                     break
+        if ev in PROGRESS_EVENTS and s.get("_regStatus") is None:
+            # No registry to ask: progress means the prompt is gone, unless crew-hook still holds it.
+            reqs = [r for r in reqs if _holding(r, at)]
+            note = None
         if reqs:
             s["_reqs"] = reqs
         else:
             s.pop("_reqs", None)
-        if before and not reqs and s["status"] == "waiting" and ev not in ("SessionEnd",):
-            # the last open request is gone; the event handler below may set a more precise status
-            s["status"] = "working"
-            s["_statusAt"] = at
-            s["waiting"] = None
-        elif reqs:
-            self._set_status(s, "waiting", at)
+        if note:
+            s["_note"] = note
+        else:
+            s.pop("_note", None)
+        # the event handler in apply() may set a more precise status afterwards
+        self._refresh_waiting(s, at, "working")
 
     def waiting_state(self, sid, rid):
         """("ok", kind) when `rid` is an open request of `sid` that crew-hook is holding, else ("not_waiting", None)."""
         s = self.sessions.get(sid)
+        now = now_ms()
         for r in (s.get("_reqs") or []) if s else []:
             if r.get("requestId") == rid:
-                if r.get("hubCanAnswer") is True:
+                if _holding(r, now) and _req_kept(s, r, now):
                     return "ok", r.get("kind")
                 break
         return "not_waiting", None
-
-    def _expire_requests(self, s, now):
-        changed = False
-        for r in s.get("_reqs") or []:
-            if r.get("hubCanAnswer") is True:
-                hold = r.get("_holdS") if isinstance(r.get("_holdS"), (int, float)) else 55
-                if now - (r.get("since") or 0) > hold * 1000 + REQ_GRACE_MS:
-                    r["hubCanAnswer"] = False
-                    changed = True
-        if changed and s.get("_reqs") and s["status"] == "waiting":
-            s["waiting"] = _public_req(s["_reqs"][-1])
-        return changed
 
     def _agent(self, s, aid, at):
         for a in s["agents"]:
@@ -654,18 +795,10 @@ class Model(object):
             self._task(s, rec["task_id"], rec.get("subject"))
         elif ev == "TaskCompleted" and rec.get("task_id"):
             self._task(s, rec["task_id"], rec.get("subject"))["status"] = "completed"
-        elif ev == "PermissionRequest":
-            if not isinstance(rec.get("rid"), str):  # older crew-hook without request ids
-                self._set_status(s, "waiting", at)
-                s["waiting"] = {"kind": "permission", "tool": tool, "text": step_text(rec) if tool else None}
         elif ev == "Notification":
-            kind = self._notification_kind(rec)
-            if kind and s.get("_reqs"):
-                self._set_status(s, "waiting", at)
-            elif kind:
-                self._set_status(s, "waiting", at)
-                prev = s.get("waiting") or {}
-                s["waiting"] = {"kind": kind, "tool": prev.get("tool"), "text": rec.get("msg") or prev.get("text")}
+            # permission/question prompts were folded in _fold_requests; "waiting for your input" means idle
+            if self._notification_kind(rec) == "input" and s["status"] == "working":
+                self._set_status(s, "idle", at)
         elif ev == "Stop" and not aid:
             self._set_status(s, "idle", at)
             if rec.get("msg"):
@@ -733,8 +866,9 @@ class Model(object):
             if s["status"] != "ended":
                 self._enrich_transcript(s)
                 self._check_alive(s, now)
-                if s.get("_reqs") and self._expire_requests(s, now):
-                    self.changed = True
+            if s["status"] != "ended":
+                reg = s.get("_regStatus")
+                self._refresh_waiting(s, now, REGISTRY_STATUS.get(reg, "working") if reg is not None else "idle")
             self._sweep_agents(s, now)
             self._refresh_name(s)
         if plans_dir:
@@ -769,7 +903,7 @@ class Model(object):
             if s.get("_fromPlan"):
                 lst = [x for x in lst if x[0]]  # plan-only sessions only follow a live registry entry
             if not lst:
-                s.pop("_regStatus", None)
+                self._drop_registry(s)
                 continue
             alive, d = max(lst, key=lambda x: (x[0], x[1].get("updatedAt") or 0))
             before = (s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
@@ -788,18 +922,14 @@ class Model(object):
                     # the session moved to a new process (restart/respawn): its old subagents are gone
                     self._stop_running(s, STOP_RESTARTED, now)
                 s["_regProc"] = proc
-                s["_regStatus"] = d.get("status") if isinstance(d.get("status"), str) else None
+                self._take_registry(s, d, now)
             else:
-                s.pop("_regStatus", None)
+                self._drop_registry(s)
             fstat = d.get("status")
             fat = d.get("statusUpdatedAt") or d.get("updatedAt") or 0
-            reqs = s.get("_reqs")
-            if alive and reqs and fstat in REGISTRY_STATUS and isinstance(fat, (int, float)):
-                newest = max(r.get("since") or 0 for r in reqs)
-                if fat > newest + REQ_RESOLVED_SLACK_MS:
-                    # Claude Code left the prompt (answered in the terminal/claude.ai, or the turn was cut).
-                    s.pop("_reqs", None)
-                    self._set_status(s, REGISTRY_STATUS[fstat], int(fat))
+            if alive:
+                # registry-driven waiting: set by "waiting", cleared by busy/idle unless a hold still backs it
+                self._refresh_waiting(s, now, REGISTRY_STATUS.get(fstat, "working"))
             if alive and isinstance(fat, (int, float)) and fat > (s.get("_statusAt") or 0) + 1000:
                 if fstat == "idle" and s["status"] == "working":
                     self._set_status(s, "idle", int(fat))
@@ -809,6 +939,24 @@ class Model(object):
             if before != (s.get("ccr"), s["status"], s.get("_pid"), s.get("kind"), s.get("_inbox"),
                           len(s.get("_reqs") or [])):
                 self.changed = True
+
+    @staticmethod
+    def _take_registry(s, d, now):
+        """Remember a live registry entry's status for the waiting rules (_regStatus/_regAt/_regWaitingFor/_regRead)."""
+        st = d.get("status")
+        s["_regStatus"] = st[:20] if isinstance(st, str) else None
+        if s["_regStatus"] is None:
+            s.pop("_regStatus", None)
+        at = d.get("statusUpdatedAt") or d.get("updatedAt")
+        s["_regAt"] = int(at) if _num(at) else None
+        wf = d.get("waitingFor")
+        s["_regWaitingFor"] = wf.strip()[:60] if isinstance(wf, str) and wf.strip() else None
+        s["_regRead"] = now
+
+    @staticmethod
+    def _drop_registry(s):
+        for k in ("_regStatus", "_regAt", "_regWaitingFor", "_regRead"):
+            s.pop(k, None)
 
     def _enrich_transcript(self, s):
         tp = s.get("_tp")
@@ -839,7 +987,7 @@ class Model(object):
             if pid and not pid_alive(pid):
                 s.pop("_pid", None)
                 s.pop("_pidSrc", None)
-                s.pop("_regStatus", None)
+                self._drop_registry(s)
                 self._set_status(s, "idle", now)
                 self._refresh_name(s)
                 self.changed = True
@@ -930,13 +1078,14 @@ class Model(object):
             s["_pid"] = d["pid"]
             s["_pidSrc"] = "sessions"
             s["_reg"] = registry_names(d, [d])
-            s["_regStatus"] = d.get("status") if isinstance(d.get("status"), str) else None
+            self._take_registry(s, d, now)
             s["_regProc"] = [d["pid"], d.get("procStart")]
             if isinstance(d.get("bridgeSessionId"), str):
                 s["ccr"] = d["bridgeSessionId"][:100]
             s["status"] = REGISTRY_STATUS.get(d.get("status"), "idle")
             fat = d.get("statusUpdatedAt") or d.get("updatedAt")
             s["_statusAt"] = int(fat) if isinstance(fat, (int, float)) else now
+            self._refresh_waiting(s, now, s["status"])  # a registry "waiting" shows right away
         self._refresh_name(s)
         self.changed = True
         return s

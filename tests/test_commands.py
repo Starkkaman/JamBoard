@@ -551,13 +551,14 @@ class HookHoldTest(TempHome):
         recs = spool_records(self.home)
         self.assertEqual([r["ev"] for r in recs], ["PermissionRequest", "unanswered"])
         self.assertEqual(recs[0]["rid"], recs[1]["rid"])
-        # the folded state keeps the prompt (still open elsewhere) but HA can no longer answer it
+        # 0.4.1: without a registry entry saying waiting, an unanswered request is dropped (tests/test_waiting.py
+        # covers the registry case), and HA can't answer it either way
         m = Model()
         for r in recs:
             m.apply(r)
         s = m.snapshot({"id": "m"}, commands_active=True)["sessions"][0]
-        self.assertEqual(s["status"], "waiting")
-        self.assertFalse(s["waiting"]["hubCanAnswer"])
+        self.assertNotEqual(s["status"], "waiting")
+        self.assertIsNone(s["waiting"])
         self.assertNotIn("answer", s["controls"])
 
     def test_no_hold_without_secret_or_when_disabled(self):

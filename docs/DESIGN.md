@@ -64,7 +64,7 @@ sessions: [{
   id (local session_id), ccr (session_… id for Remote Control sessions), name (human, see below), localName
   (registry name, e.g. project-aa), project (cwd basename),
   status: working | waiting | idle | ended,
-  waiting?: {kind: permission | question | input, tool, text, requestId, options?},
+  waiting?: {kind: permission | question | input, tool, text, requestId?, since?, questions?, hubCanAnswer?},
   summary (last assistant message, first line, ≤200 chars), model, effort,
   ctx {used, max}, costUsd (estimated), startedAt, updatedAt,
   tasks: [{id, subject, status pending|in_progress|completed}],          ← TaskCreate/TaskUpdate tools
@@ -74,6 +74,19 @@ sessions: [{
             stopReason ("session restarted" | "stopped by session" | "inactive" | null), steps, current {text, at}, trail: [{text, at}] (last 3)}]
 }]
 ```
+
+0.4.1 waiting rules (state.py): `waiting` means a prompt is open **right now**. The live registry entry
+(`sessions/<pid>.json`) is authoritative: `waiting` shows waiting (text from the crew-hook request, else the
+Notification, else `waitingFor`); `busy`/`idle`/`shell` clear it within one enrich pass (3 s, the allowance for registry
+write lag), except a request crew-hook is still holding whose registry status hasn't changed since the request. A
+registry status that changed after the request means the prompt was answered or denied elsewhere (a deny in claude.ai or
+the terminal fires no PostToolUse, PermissionDenied or Stop). Without a live registry entry (other machines on older
+versions, print sessions) any later progress event of the session or its agents ends it (PreToolUse, PostToolUse,
+PostToolUseFailure, PermissionDenied, UserPromptSubmit, SubagentStart/Stop, TaskCreated/Completed, Stop, SessionEnd),
+except a request crew-hook still holds; "unanswered" or a hold that ran out drops a request, requests expire after
+10 min and a request-less Notification after 60 s. "unanswered" requests stay only while the registry says waiting.
+`hubCanAnswer` is true only while crew-hook holds the request. `idle_prompt` ("waiting for your input") is idle, not
+waiting.
 
 0.4.0 rules (state.py): `name` = registry name when `nameSource` is user/auto, else the newest non-derived
 `formerNames` name, else the plan title before ":", else the cwd basename + " (" + localName + ")" (just localName when

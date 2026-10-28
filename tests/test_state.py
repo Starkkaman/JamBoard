@@ -95,10 +95,11 @@ class FoldRulesTest(unittest.TestCase):
         self.assertEqual((s["status"], s["waiting"]), ("working", None))
         s = self.ev(m, "Stop", 5, msg="ok")
         self.assertEqual(s["status"], "idle")
+        # 0.4.1: "waiting for your input" is an idle session, not an open prompt
         s = self.ev(m, "Notification", 6, ntype="idle_prompt", msg="Claude is waiting for your input")
-        self.assertEqual(s["waiting"]["kind"], "input")
+        self.assertEqual((s["status"], s["waiting"]), ("idle", None))
         s = self.ev(m, "Notification", 7, ntype="auth_success", msg="ok")
-        self.assertEqual(s["status"], "waiting")  # unrelated notifications don't change status
+        self.assertEqual(s["status"], "idle")  # unrelated notifications don't change status
 
     def test_agent_cap_and_trail(self):
         m = Model()
