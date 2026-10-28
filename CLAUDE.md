@@ -21,7 +21,7 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
   in HA, `crew-hub-pair` run by the human in their own terminal (never via Claude). Interop test tests/ha/test_interop.py.
   NAS stays on MQTT. Mac does NOT need broker ACLs/Tailscale anymore (ACLs still nice-to-have).
 - Crew Flow plugin BUILT 2026-10-27 (plugins/crew-flow 0.1.0, docs/CREW-FLOW.md, rules from docs/research/orchestration-efficiency.md): tracking
-  via built-in task list + agent/task title joins; e2e verified (~$0.02). Not installed on the NAS yet (needs Isaac's OK).
+  via built-in task list + agent/task title joins; e2e verified (~$0.02). Installed on the NAS 2026-10-27 (user scope); main CLAUDE.md plan-file rule shortened (backup in scratchpad).
 - 0.4.1 (2026-10-27): waiting = prompt open now (registry-driven); false "needs you" came from Macs' idle_prompt. Macs need the update.
 - Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
