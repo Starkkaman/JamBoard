@@ -1,7 +1,11 @@
 {
   "name": "jamboard",
-  "owner": { "name": "Isaac" },
-  "metadata": { "description": "Isaac's home-lab Claude Code plugins." },
+  "owner": {
+    "name": "Isaac"
+  },
+  "metadata": {
+    "description": "Isaac's home-lab Claude Code plugins."
+  },
   "plugins": [
     {
       "name": "crew-hub",
@@ -9,6 +13,13 @@
       "description": "Zero-token live progress of every Claude Code session and agent, published to Home Assistant over MQTT or an HTTPS webhook.",
       "version": "0.5.0",
       "category": "mod"
+    },
+    {
+      "name": "crew-flow",
+      "source": "./plugins/crew-flow",
+      "description": "Orchestrator skill /crew-flow with lean tiered workers; plans show on the Crew Hub dashboard via the built-in task list.",
+      "version": "0.1.0",
+      "category": "productivity"
     }
   ]
 }

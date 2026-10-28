@@ -171,6 +171,25 @@ to Home Assistant over HTTPS instead, through the same public address you use fo
   `agent_transcript_path`, kept local like the session transcript path). Transcripts are read incrementally from a
   remembered offset, at most 4 MB per file and 16 MB per 3 s pass, so a first look at a large history takes a few passes.
 
+## Crew Flow (plugin crew-flow 0.1.0)
+
+An orchestrator skill in the same marketplace, successor to savvy-flow: the session plans, owns design, delegates to
+tiered workers and reviews their diffs. Rules come from `docs/research/orchestration-efficiency.md`.
+
+- **Install**: `/plugin install crew-flow@jamboard` (needs the `jamboard` marketplace from the Install section; for a
+  one-off try, `claude --plugin-dir plugins/crew-flow`). Crew Hub (`crew-hub@jamboard`) must be installed on the same
+  machine for the dashboard part.
+- **Use**: `/crew-flow <task>`, best with the session at high effort (`claude --effort high`, set at the start).
+  Workers: `crew-heavy` (Opus xhigh, insight), `crew-careful` (high, thoroughness), `crew-medium` (medium, standard
+  work), `crew-light` (low, mechanical). No Fable tier. Workers start lean: no CLAUDE.md (`omitClaudeMd`), an
+  explicit tool list (Bash, Read, Edit, Write, ToolSearch, Monitor, TaskStop; no Skill, no MCP), auto-compact at 250K,
+  and a short set of ground rules in place of CLAUDE.md, so every brief carries the project rules that matter.
+  To give a tier an MCP server, add `mcp__<server>` to its `tools:` line.
+- **On the Crew dashboard**: no plan file and no extra tokens. The orchestrator creates one built-in task per step
+  (`[tier] Project: title`), launches each worker with the description `Project: title #<taskId>`, and marks tasks
+  in progress / completed. crew-hubd turns that into `session.plan` with `source: "tasks"`: tiers from the prefix,
+  agents joined to their tasks by `#<taskId>`, phase plan → delegate → review → finished, title `<Project>: <n> tasks`.
+
 ## The card (integration 0.5.0)
 
 - **Active plans**: one paper strip per unfinished plan on any machine and session (newest first), plus plans that

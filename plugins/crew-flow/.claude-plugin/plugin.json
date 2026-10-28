@@ -1,0 +1,7 @@
+{
+  "name": "crew-flow",
+  "version": "0.1.0",
+  "description": "Orchestrated delivery flow (/crew-flow <task>): plan, delegate to lean tiered workers (Heavy/Careful/Medium/Light), adversarial review against the diff. Progress shows on the Crew Hub dashboard through the built-in task list, at zero extra tokens.",
+  "author": { "name": "Isaac" },
+  "license": "MIT"
+}
