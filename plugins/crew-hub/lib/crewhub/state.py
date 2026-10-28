@@ -31,6 +31,16 @@ crew-hook), and the live registry entry (~/.claude/sessions/<pid>.json status "w
   expire after NOREG_MAX_MS, notes after NOTE_MAX_MS.
 - hubCanAnswer is true only while crew-hook holds the request (hold not over, "answered"/"unanswered" not seen).
 - idle_prompt notifications ("waiting for your input") mean idle, not waiting.
+
+Plans (0.5.0): session.plan carries "source": "file" (the plan file, always wins) or "tasks" (derived from the built-in
+task list when there is no plan file; see derive_plan). A derived plan needs at least 2 tasks or one tier prefix.
+
+Tokens (0.5.0): session.tokens {in, out, cacheRead, cacheWrite, cacheHit, turns} sums the main-thread assistant usage
+of the session transcript (subagents excluded; turns = distinct assistant messages, i.e. API calls); agent.tokens
+{in, out, cacheRead, cacheWrite} sums the agent's own transcript (<session transcript without .jsonl>/subagents/
+agent-<id>.jsonl, or the SubagentStop agent_transcript_path): every 15 s while it runs, once more after it ends.
+Transcripts are read incrementally from a remembered (inode, offset); usage repeated per content block is counted once
+per message id. Transcript paths are local only ("_" keys).
 """
 
 import json
@@ -58,6 +68,16 @@ ENDED_TTL_MS = 3600 * 1000
 STALE_MS = 24 * 3600 * 1000  # no event for a day and no way to check the pid: treat as ended
 SNAPSHOT_MAX = 40000
 TRANSCRIPT_TAIL = 128 * 1024
+TOKEN_FILE_CHUNK = 4 * 1024 * 1024  # most bytes read from one transcript per enrich pass
+TOKEN_PASS_BUDGET = 16 * 1024 * 1024  # most bytes read from all transcripts per enrich pass
+TOKEN_IDS = 16  # recent message ids remembered for de-duplicating repeated usage
+AGENT_TOKENS_EVERY_MS = 15 * 1000
+AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+TIERS = ("heavy", "careful", "medium", "light")
+TIER_RE = re.compile(r"^\[(heavy|careful|medium|light)\]\s*", re.I)
+TASK_REF_RE = re.compile(r"\s*#([A-Za-z0-9_.-]{1,40})\s*$")
+PROJECT_RE = re.compile(r"^([^:\[\]#\s][^:\[\]#]{0,39}?)\s*:\s+(\S.*)$")
 PLAN_MAX_BYTES = 256 * 1024
 
 WORKING_EVENTS = ("UserPromptSubmit", "PreToolUse", "SubagentStart")
@@ -126,6 +146,7 @@ def validate_plan(data):
         "total": num(data.get("total")),
         "finished": bool(data.get("finished")),
         "updatedAt": data.get("updatedAt") if isinstance(data.get("updatedAt"), (int, float, str)) else None,
+        "source": "file",
         "tasks": [],
     }
     if isinstance(data.get("ccrSessionId"), str):
@@ -203,6 +224,242 @@ def read_transcript_usage(path):
                 used += v
         return (model if isinstance(model, str) else None), used
     return None, None
+
+
+def _usage_vals(u):
+    return [u[k] if isinstance(u.get(k), int) and u[k] > 0 else 0 for k in USAGE_KEYS]
+
+
+def read_usage(path, tok, budget=TOKEN_FILE_CHUNK, main_only=False):
+    """Continue summing assistant usage in the transcript at `path` from the reader state `tok` (None: from the start).
+
+    Returns (state, bytes consumed); state is None when the file can't be read. state = {ino, off, t: [in, out,
+    cacheRead, cacheWrite, turns], ids: [[message id, [in, out, cacheRead, cacheWrite]], ...]}. A replaced or shrunk
+    file starts over. Only complete lines are consumed; at most `budget` bytes are read per call. Claude Code writes one
+    line per content block with the same message id and usage, so a repeated id only adds what grew."""
+    try:
+        f = open(path, "rb")
+    except OSError:
+        return None, 0
+    with f:
+        try:
+            st = os.fstat(f.fileno())
+        except OSError:
+            return None, 0
+        if not isinstance(tok, dict) or tok.get("ino") != st.st_ino or not _num(tok.get("off")) \
+                or st.st_size < tok["off"]:
+            tok = {"ino": st.st_ino, "off": 0, "t": [0, 0, 0, 0, 0], "ids": []}
+        off = int(tok["off"])
+        if st.st_size <= off or budget <= 0:
+            return tok, 0
+        f.seek(off)
+        data = f.read(min(budget, st.st_size - off))
+    end = data.rfind(b"\n")
+    if end < 0:
+        if len(data) >= budget:  # one line longer than the budget (no usage line is): skip it
+            tok["off"] = off + len(data)
+            return tok, len(data)
+        return tok, 0  # a line still being written
+    chunk = data[: end + 1]
+    tok["off"] = off + len(chunk)
+    tot = tok["t"]
+    ids = tok["ids"]
+    for raw in chunk.split(b"\n"):
+        if b'"usage"' not in raw or b'"assistant"' not in raw:
+            continue
+        try:
+            d = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(d, dict) or d.get("type") != "assistant" or (main_only and d.get("isSidechain")):
+            continue
+        msg = d.get("message")
+        if not isinstance(msg, dict) or msg.get("model") == "<synthetic>" or not isinstance(msg.get("usage"), dict):
+            continue
+        vals = _usage_vals(msg["usage"])
+        mid = msg.get("id") if isinstance(msg.get("id"), str) else d.get("uuid")
+        prev = None
+        for e in ids:
+            if e[0] == mid and mid is not None:
+                prev = e
+                break
+        if prev is None:
+            for i in range(4):
+                tot[i] += vals[i]
+            tot[4] += 1
+            ids.append([mid, vals])
+            del ids[:-TOKEN_IDS]
+        else:
+            for i in range(4):
+                if vals[i] > prev[1][i]:
+                    tot[i] += vals[i] - prev[1][i]
+                    prev[1][i] = vals[i]
+    return tok, len(chunk)
+
+
+def session_tokens(tok):
+    """Public session.tokens from a read_usage state."""
+    i, o, cr, cw, turns = tok["t"]
+    den = i + cr + cw
+    return {"in": i, "out": o, "cacheRead": cr, "cacheWrite": cw,
+            "cacheHit": round(cr / den, 3) if den else None, "turns": turns}
+
+
+def agent_tokens(tok):
+    i, o, cr, cw = tok["t"][:4]
+    return {"in": i, "out": o, "cacheRead": cr, "cacheWrite": cw}
+
+
+def agent_transcript(session_tp, aid):
+    """<session transcript minus .jsonl>/subagents/agent-<aid>.jsonl (Claude Code 2.1.3xx layout), or None."""
+    if not isinstance(session_tp, str) or not session_tp.endswith(".jsonl") or not isinstance(aid, str) \
+            or not AGENT_ID_RE.match(aid):
+        return None
+    return os.path.join(session_tp[: -len(".jsonl")], "subagents", "agent-%s.jsonl" % aid)
+
+
+# ---- plans derived from the built-in task list (Crew Flow, docs/CREW-FLOW.md) ------------------------------------------
+def _norm(text):
+    return " ".join(text.split()).casefold() if isinstance(text, str) else ""
+
+
+def parse_subject(subject):
+    """(tier, project, title, bare) for a task subject or agent description.
+
+    "[tier] " (heavy|careful|medium|light, any case) and "Project: " prefixes may come in either order. `title` is the
+    text without the tier prefix (project kept, "Project: title"), `bare` the title without the project prefix."""
+    text = " ".join(subject.split()) if isinstance(subject, str) else ""
+    tier = project = None
+    m = TIER_RE.match(text)
+    if m:
+        tier = m.group(1).lower()
+        text = text[m.end():]
+    bare = text
+    m = PROJECT_RE.match(text)
+    if m:
+        project, bare = m.group(1).strip(), m.group(2)
+        m2 = TIER_RE.match(bare) if tier is None else None
+        if m2:
+            tier = m2.group(1).lower()
+            bare = bare[m2.end():]
+        text = "%s: %s" % (project, bare)
+    return tier, project, text, bare
+
+
+def _title_keys(title, bare):
+    keys = {_norm(title), _norm(bare)}
+    keys.discard("")
+    return keys
+
+
+def _key_matches(agent_key, task_keys):
+    """Exact (case-insensitive) match; a task subject clipped with "…" matches an agent title it is a prefix of."""
+    for k in task_keys:
+        if agent_key == k or (k.endswith("\u2026") and len(k) > 10 and agent_key.startswith(k[:-1].rstrip())):
+            return True
+    return False
+
+
+def _agent_start(a):
+    v = a.get("startedAt")
+    return v if _num(v) else 0
+
+
+def join_agents(tasks, agents):
+    """{task id: [agents]} — an explicit "#<taskId>" at the end of the agent title, else the first task whose title
+    (tier prefix stripped, with or without its project prefix) equals the agent's title case-insensitively, preferring
+    one not completed and not already held by a running agent."""
+    keys = {}
+    for t in tasks:
+        _, _, title, bare = parse_subject(t.get("subject"))
+        keys[t["id"]] = _title_keys(title, bare)
+    joined = {}
+    for a in sorted(agents, key=_agent_start):
+        title = a.get("title")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        tid = None
+        m = TASK_REF_RE.search(title)
+        if m:
+            if m.group(1) in keys:
+                tid = m.group(1)
+            title = title[: m.start()]
+        if tid is None:
+            _, _, atitle, _ = parse_subject(title)
+            akey = _norm(atitle)
+            if not akey:
+                continue
+            cands = [t for t in tasks if _key_matches(akey, keys[t["id"]])]
+            if not cands:
+                continue
+            free = [t for t in cands if t.get("status") != "completed"
+                    and not any(x.get("status") == "running" for x in joined.get(t["id"], []))]
+            tid = (free or cands)[0]["id"]
+        joined.setdefault(tid, []).append(a)
+    return joined
+
+
+def derive_plan(s, name=None):
+    """session.plan built from the session's built-in task list (s["tasks"] from TaskCreated/TaskUpdate), or None.
+
+    Active only with at least 2 tasks or a tier prefix on any task. Status: completed -> done; a joined agent running ->
+    running; the newest joined agent failed/stopped (and the task not completed) -> failed; in_progress -> running;
+    else queued. Phase: all completed -> finished; a joined agent running -> delegate; joined agents all finished ->
+    review; no joined agent yet -> plan. Title: "<Project>: <n> tasks" when every task has the same project prefix,
+    else `name`."""
+    if s.get("_todos"):
+        return None  # a TodoWrite list, not the built-in task list
+    tasks = [t for t in s.get("tasks") or [] if isinstance(t, dict) and t.get("id") is not None]
+    if not tasks:
+        return None
+    parsed = [parse_subject(t.get("subject")) for t in tasks]
+    if len(tasks) < 2 and not any(p[0] for p in parsed):
+        return None
+    projects = {p[1] for p in parsed}
+    common = projects.pop() if len(projects) == 1 else None
+    joined = join_agents(tasks, [a for a in s.get("agents") or [] if isinstance(a, dict)])
+    out = []
+    done = 0
+    any_running = False
+    updated = s.get("_tasksAt") if _num(s.get("_tasksAt")) else 0
+    for i, (t, (tier, _, title, bare)) in enumerate(zip(tasks, parsed)):
+        ags = joined.get(t["id"], [])
+        running = any(a.get("status") == "running" for a in ags)
+        newest = max(ags, key=_agent_start) if ags else None
+        any_running = any_running or running
+        for a in ags:
+            for k in ("startedAt", "endedAt"):
+                if _num(a.get(k)) and a[k] > updated:
+                    updated = a[k]
+        st = t.get("status")
+        if st == "completed":
+            status = "done"
+            done += 1
+        elif running:
+            status = "running"
+        elif newest is not None and newest.get("status") in ("failed", "stopped"):
+            status = "failed"
+        elif st == "in_progress":
+            status = "running"
+        else:
+            status = "queued"
+        out.append({"id": str(t["id"])[:60], "title": (bare if common else title)[:200] or str(t["id"]), "tier": tier,
+                    "status": status, "order": i + 1, "agentId": newest.get("id") if newest else None,
+                    "summary": None})
+    if done == len(tasks):
+        phase = "finished"
+    elif any_running:
+        phase = "delegate"
+    elif joined:
+        phase = "review"
+    else:
+        phase = "plan"
+    if common:
+        title = "%s: %d tasks" % (common, len(tasks))
+    else:
+        title = name if isinstance(name, str) and name.strip() else "Tasks"
+    return {"title": title[:200], "phase": phase, "done": done, "total": len(tasks), "finished": phase == "finished",
+            "updatedAt": updated or None, "source": "tasks", "tasks": out}
 
 
 def find_registry(sessions_dir, sid):
@@ -306,6 +563,8 @@ def display_name(s):
         return reg["former"], local
     plan = s.get("plan")
     title = plan.get("title") if isinstance(plan, dict) else None
+    if isinstance(plan, dict) and plan.get("source") == "tasks" and ": " not in (title or ""):
+        title = None  # a derived plan without a project prefix is titled after the session itself
     if isinstance(title, str) and title.strip():
         head = title.split(":", 1)[0].strip()
         return (head or title.strip())[:200], local
@@ -401,6 +660,7 @@ def _confirmed_claude_pid(pid):
 class Model(object):
     def __init__(self, ctx_max=None):
         self.sessions = {}
+        self._token_budget = TOKEN_PASS_BUDGET
         self.ctx_max = ctx_max or (lambda model: 1000000 if model and ("opus" in model or "fable" in model) else 200000)
         self.changed = True
         self._bad_plans = {}  # sid -> signature of a plan file that didn't parse (not re-read until it changes)
@@ -431,6 +691,7 @@ class Model(object):
                 "effort": None,
                 "ctx": {"used": None, "max": None},
                 "costUsd": None,
+                "tokens": None,
                 "startedAt": at,
                 "updatedAt": at,
                 "tasks": [],
@@ -604,6 +865,7 @@ class Model(object):
             "steps": 0,
             "current": None,
             "trail": [],
+            "tokens": None,
         }
         s["agents"].append(a)
         if len(s["agents"]) > MAX_AGENTS:
@@ -770,10 +1032,13 @@ class Model(object):
                 elif tool == "TaskUpdate" and rec.get("taskId"):
                     sc = rec.get("statusChange") or {}
                     to = sc.get("to")
+                    s["_tasksAt"] = at
                     if to == "deleted":
                         s["tasks"] = [t for t in s["tasks"] if t["id"] != rec["taskId"]]
                     elif to:
-                        self._task(s, rec["taskId"])["status"] = to
+                        self._task(s, rec["taskId"], rec.get("subject"))["status"] = to
+                    elif rec.get("subject"):
+                        self._task(s, rec["taskId"], rec["subject"])
                 elif tool == "TodoWrite" and isinstance(rec.get("todos"), list):
                     self._todos(s, rec["todos"])
                 elif tool in STOP_TOOLS and isinstance(rec.get("stopTask"), str):
@@ -791,9 +1056,15 @@ class Model(object):
             a["stopReason"] = None
             if rec.get("atype") and not a["type"]:
                 a["type"] = rec["atype"]
+            if isinstance(rec.get("atp"), str) and rec["atp"].endswith(".jsonl"):
+                a["_atp"] = rec["atp"]  # local only: token sum at stop
         elif ev == "TaskCreated" and rec.get("task_id"):
+            if s.pop("_todos", None):
+                s["tasks"] = []  # the built-in task list replaces an older TodoWrite list
+            s["_tasksAt"] = at
             self._task(s, rec["task_id"], rec.get("subject"))
         elif ev == "TaskCompleted" and rec.get("task_id"):
+            s["_tasksAt"] = at
             self._task(s, rec["task_id"], rec.get("subject"))["status"] = "completed"
         elif ev == "Notification":
             # permission/question prompts were folded in _fold_requests; "waiting for your input" means idle
@@ -815,6 +1086,7 @@ class Model(object):
                 if a["status"] == "running":
                     a["status"] = "done"
                     a["endedAt"] = at
+        self._sync_plan(s)
         self._refresh_name(s)
 
     @staticmethod
@@ -830,6 +1102,7 @@ class Model(object):
         return None
 
     def _todos(self, s, todos):
+        s["_todos"] = True
         s["tasks"] = [
             {"id": str(i + 1), "subject": t.get("content") or "", "status": t.get("status") or "pending"}
             for i, t in enumerate(todos[:MAX_TASKS])
@@ -854,15 +1127,81 @@ class Model(object):
             s["_fromPlan"] = True
         s["plan"] = plan
         s["_planSig"] = list(sig) if sig else None
+        self._sync_plan(s)
         self._refresh_name(s)
         self.changed = True
+
+    def _sync_plan(self, s):
+        """Keep the plan file's plan (source "file"); without one, derive the plan from the task list (source
+        "tasks", or None). Returns True when session.plan changed."""
+        p = s.get("plan")
+        if isinstance(p, dict) and (p.get("source") == "file" or (p.get("source") is None and s.get("_planSig"))):
+            p["source"] = "file"  # state.json from before 0.5.0
+            return False
+        name = display_name(dict(s, plan=None))[0]
+        d = derive_plan(s, name)
+        if d != p:
+            s["plan"] = d
+            self.changed = True
+            return True
+        return False
+
+    # ---- tokens -----------------------------------------------------------------------------------------------
+    def _read_tokens(self, path, tok, main_only):
+        budget = min(TOKEN_FILE_CHUNK, self._token_budget)
+        new, used = read_usage(path, tok, budget, main_only)
+        self._token_budget -= used
+        return new, used
+
+    def _enrich_tokens(self, s, now):
+        """Session totals from the session transcript, agent totals from the agents' transcripts (module doc)."""
+        tp = s.get("_tp")
+        if tp and self._token_budget > 0:
+            tok, _ = self._read_tokens(tp, s.get("_tok"), True)
+            if tok is not None:
+                s["_tok"] = tok
+                pub = session_tokens(tok)
+                if s.get("tokens") != pub:
+                    s["tokens"] = pub
+                    self.changed = True
+        for a in s.get("agents") or []:
+            running = a.get("status") == "running"
+            if running:
+                if now - (a.get("_tokAt") or 0) < AGENT_TOKENS_EVERY_MS:
+                    continue
+            elif a.get("_tokEnd") == a.get("endedAt") and "_tokEnd" in a:
+                continue  # final sum done for this end
+            if self._token_budget <= 0:
+                return
+            path = a.get("_atp") or agent_transcript(tp, a.get("id"))
+            if not path:
+                continue
+            a["_tokAt"] = now
+            tok, _ = self._read_tokens(path, a.get("_tok"), False)
+            if tok is None:
+                if not running and now - (_ended_key(a) or now) > AGENT_TOKENS_EVERY_MS:
+                    a["_tokEnd"] = a.get("endedAt")  # no transcript to read: give up
+                continue
+            a["_tok"] = tok
+            pub = agent_tokens(tok)
+            if a.get("tokens") != pub:
+                a["tokens"] = pub
+                self.changed = True
+            if not running:
+                try:
+                    complete = tok["off"] >= os.stat(path).st_size
+                except OSError:
+                    complete = True
+                if complete:
+                    a["_tokEnd"] = a.get("endedAt")
 
     # ---- enrichment ---------------------------------------------------------------------------------------------
     def enrich(self, sessions_dir=None, plans_dir=None, now=None):
         now = now or now_ms()
+        self._token_budget = TOKEN_PASS_BUDGET
         if sessions_dir:
             self._enrich_sessions_dir(sessions_dir, now)
-        for s in self.sessions.values():
+        for s in sorted(self.sessions.values(), key=lambda x: -(x.get("updatedAt") or 0)):
             if s["status"] != "ended":
                 self._enrich_transcript(s)
                 self._check_alive(s, now)
@@ -870,6 +1209,8 @@ class Model(object):
                 reg = s.get("_regStatus")
                 self._refresh_waiting(s, now, REGISTRY_STATUS.get(reg, "working") if reg is not None else "idle")
             self._sweep_agents(s, now)
+            self._enrich_tokens(s, now)
+            self._sync_plan(s)
             self._refresh_name(s)
         if plans_dir:
             self.poll_plans(plans_dir, sessions_dir, now)
@@ -1019,6 +1360,7 @@ class Model(object):
             plan, rsig = read_plan_file(path)
             s["plan"] = plan
             s["_planSig"] = list(rsig) if rsig else None
+            self._sync_plan(s)
             self.changed = True
 
     def poll_plans(self, plans_dir, sessions_dir=None, now=None):
@@ -1086,6 +1428,7 @@ class Model(object):
             fat = d.get("statusUpdatedAt") or d.get("updatedAt")
             s["_statusAt"] = int(fat) if isinstance(fat, (int, float)) else now
             self._refresh_waiting(s, now, s["status"])  # a registry "waiting" shows right away
+        self._sync_plan(s)
         self._refresh_name(s)
         self.changed = True
         return s
@@ -1119,8 +1462,13 @@ class Model(object):
     @classmethod
     def _public(cls, s, commands_active=False):
         out = {k: v for k, v in s.items() if not k.startswith("_")}
-        out["agents"] = [dict(a, trail=list(a.get("trail") or []), stopReason=a.get("stopReason")) for a in s["agents"]]
+        out["agents"] = [dict({k: v for k, v in a.items() if not k.startswith("_")}, trail=list(a.get("trail") or []),
+                              stopReason=a.get("stopReason"), tokens=_copy(a.get("tokens")))
+                         for a in s["agents"]]
         out.setdefault("localName", None)
+        out["tokens"] = _copy(s.get("tokens"))
+        if isinstance(out.get("plan"), dict):
+            out["plan"] = dict(out["plan"], tasks=[dict(t) for t in out["plan"].get("tasks") or []])
         out["tasks"] = [dict(t) for t in s["tasks"]]
         out["kind"] = s.get("kind") or "interactive"
         out["controls"] = cls._controls(s, commands_active)
@@ -1135,6 +1483,10 @@ class Model(object):
         sessions = [self._public(s, commands_active) for s in order]
         snap = {"machine": machine, "sessions": sessions}
         return cap_snapshot(snap)
+
+
+def _copy(d):
+    return dict(d) if isinstance(d, dict) else None
 
 
 def _public_req(w):

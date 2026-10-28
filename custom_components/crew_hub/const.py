@@ -2,7 +2,7 @@
 
 DOMAIN = "crew_hub"
 NAME = "Crew Hub"
-VERSION = "0.4.0"  # keep equal to manifest.json "version"
+VERSION = "0.5.0"  # keep equal to manifest.json "version"
 
 CONF_PREFIX = "prefix"
 CONF_MACHINES = "machines"

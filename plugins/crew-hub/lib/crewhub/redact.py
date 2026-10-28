@@ -220,6 +220,10 @@ def redact(payload, ts, pid=None, plans_dir=None, summaries=True):
     tp = _str(payload.get("transcript_path"), 1024)
     if tp:
         rec["tp"] = tp  # local only: the daemon reads the transcript tail; never published
+    if ev == "SubagentStop":
+        atp = _str(payload.get("agent_transcript_path"), 1024)
+        if atp:
+            rec["atp"] = atp  # local only: the daemon sums the agent's token usage from it; never published
     for src, dst, lim in (("agent_id", "agent", 100), ("agent_type", "atype", 80), ("tool_use_id", "tuid", 100)):
         val = _str(payload.get(src), lim)
         if val:
@@ -273,6 +277,12 @@ def redact(payload, ts, pid=None, plans_dir=None, summaries=True):
                 sc = resp.get("statusChange")
                 if isinstance(sc, dict):
                     rec["statusChange"] = {"from": _str(sc.get("from"), 20), "to": _str(sc.get("to"), 20)}
+                elif isinstance(tool_input, dict) and tool_input.get("status") == "deleted":
+                    rec["statusChange"] = {"from": None, "to": "deleted"}
+                if isinstance(tool_input, dict):
+                    subj = clip(tool_input.get("subject"), SUBJECT_MAX)  # a renamed task (same limit as TaskCreated)
+                    if subj:
+                        rec["subject"] = subj
             elif tool in ("Write", "Edit") and plans_dir and isinstance(tool_input, dict):
                 plan = plan_path_for(tool_input.get("file_path"), plans_dir)
                 if plan:

@@ -1,5 +1,6 @@
 // Browser check of the card's command controls against card/preview-hass.html (fake hass: a snapshot every second,
 // crew_hub/command answered after 600 ms). Run: pw-node card/verify-controls.js  (exit code 0 = all checks passed)
+// 0.5.0: token chips (session "312k tok · 94% cached", agent "48k tok"), a tasks-sourced plan strip with "from tasks".
 // 0.4.0: active plans stack (strips, tap scrolls, +N more), idle section (collapsed, rows expand), finished agents toggle,
 // Clear finished / Dismiss send crew_hub/dismiss and the items go once the fake connection pushes the filtered machine.
 // Writes card/screenshots/card-v040-390.png and card-v040-1280.png.
@@ -81,12 +82,17 @@ const server = http.createServer((req, res) => {
     // Active plans: both unfinished plans + the one finished 4 min ago, newest first; the old finished plan isn't there
     const strips = card.locator(".plans .strip");
     const titles = await strips.locator("h3").allTextContents();
-    check(JSON.stringify(titles) === JSON.stringify(["NerveOS: resume stopped agent work", "Jamfin: verify on the TV and fix", "Flicker meter: 7 Pro readout fix"]),
+    check(JSON.stringify(titles) === JSON.stringify(["NerveOS: resume stopped agent work", "Jamfin: verify on the TV and fix", "Crew Hub: 3 tasks", "Flicker meter: 7 Pro readout fix"]),
       "plan strips: " + titles.join(" | "));
     const s0 = await strips.nth(1).textContent();
     check(s0.includes("6 of 7 accepted") && s0.includes("Jamfin · nas"), "strip: count + session and machine");
-    check(await strips.nth(2).locator(".phase").textContent() === "finished"
-      && await strips.nth(2).locator(".bar i").evaluate(e => e.style.width) === "100%", "recently finished plan: chip finished, bar full");
+    check(await strips.nth(1).locator(".src").count() === 0, "file plan: no 'from tasks' tag");
+    // 0.5.0: a plan derived from the built-in task list looks like a file plan, plus a dim "from tasks" tag
+    check(await strips.nth(2).locator(".src").textContent() === "from tasks"
+      && await strips.nth(2).locator(".phase").textContent() === "delegate"
+      && (await strips.nth(2).textContent()).includes("1 of 3 accepted"), "tasks-sourced plan: phase, count, 'from tasks' tag");
+    check(await strips.nth(3).locator(".phase").textContent() === "finished"
+      && await strips.nth(3).locator(".bar i").evaluate(e => e.style.width) === "100%", "recently finished plan: chip finished, bar full");
     // Sessions: working + waiting get full blocks, the 7 idle/ended ones a collapsed section
     check(await card.locator(".sessions > article.sess").count() === 5, "5 full blocks (3 working, 2 waiting)");
     check(await idleDet.evaluate(e => !e.open) && await idleDet.locator("summary").textContent() === "Idle sessions (7)", "idle section collapsed: Idle sessions (7)");
@@ -96,6 +102,22 @@ const server = http.createServer((req, res) => {
     const nq = await sess("NerveOS: resume stopped agent work").locator(".qbox ul.queue li b").allTextContents();
     check(JSON.stringify(nq) === JSON.stringify(["working", "queued", "queued"]), "NerveOS queue: running + next queued (" + nq.join(",") + ")");
     check(await sess("NerveOS: resume stopped agent work").locator(".meta").first().textContent().then(t => t.includes("project-4f")), "localName shown in the meta row");
+    // Tasks-sourced plan: tiers in the queue, task titles on joined agents
+    const cq = sess("Crew Hub").locator(".qbox ul.queue li");
+    const cqt = await cq.allTextContents();
+    check(JSON.stringify(cqt) === JSON.stringify(["workingBuild the Lovelace card careful", "queuedDraft the crew_hub integration medium"])
+      && await sess("Crew Hub").locator(".qbox button", {hasText: "1 done"}).count() === 1, "tasks-sourced queue with tiers (" + cqt.join(",") + ")");
+    // Token chips
+    const metaOf = name => sess(name).locator(".meta").first().textContent();
+    check((await metaOf("Crew Hub")).includes("312k tok · 94% cached"), "session meta: 312k tok · 94% cached");
+    check((await metaOf("Jamfin")).includes("3.3M tok · 93% cached"), "session meta: 3.3M tok · 93% cached");
+    check(!(await metaOf("NerveOS: resume stopped agent work")).includes("tok"), "no token chip without session.tokens");
+    const jam = sess("Jamfin").locator(".agents .agent .meta");
+    check((await jam.textContent()).includes("48k tok"), "agent meta: 48k tok");
+    const cha = sess("Crew Hub").locator(".agents .agent");
+    check(await cha.locator(".name").textContent() === "Build the Lovelace card"
+      && (await cha.locator(".meta").textContent()).includes("careful") && (await cha.locator(".meta").textContent()).includes("76k tok"),
+      "joined agent: task title, tier and 76k tok");
     // Finished agents collapsed; ghost agent (no title, 0 steps) not rendered
     check(await sess("Jamfin").locator(".agents .agent").count() === 1, "Jamfin: only the running agent shown");
     check(await sess("Jamfin").locator("button", {hasText: /^6 finished$/}).count() === 1, "Jamfin: '6 finished' toggle");
@@ -115,7 +137,7 @@ const server = http.createServer((req, res) => {
     check(top >= -2 && top < 40, `strip tap scrolls to the session (top ${Math.round(top)} px)`);
     // ...and opens an idle session first
     await page.evaluate(() => window.scrollTo(0, 0));
-    await strips.nth(2).click();
+    await strips.nth(3).click();
     await page.waitForTimeout(900);
     // Near the end of the page the block can't reach the very top; it must be in view.
     const ftop = await sess("Flicker meter").evaluate(e => e.getBoundingClientRect().top);
@@ -302,12 +324,12 @@ const server = http.createServer((req, res) => {
     await row("error demo").locator(".iopen").click();
     await page.evaluate(() => window.scrollTo(0, 0));
     await det.locator("summary").click(); // collapse New session for the overview shot (idle section left open)
-    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v040-390.png")});
+    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v050-390.png")});
     await page.setViewportSize({width: 1280, height: 900});
     await idleDet.locator("summary").click(); // collapsed, the default
     await page.waitForTimeout(300);
     check(await overflow() <= 0, "no horizontal overflow at 1280 px");
-    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v040-1280.png")});
+    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v050-1280.png")});
 
     check(errors.length === 0, "no console errors" + (errors.length ? ": " + errors.join(" | ") : ""));
   } finally {

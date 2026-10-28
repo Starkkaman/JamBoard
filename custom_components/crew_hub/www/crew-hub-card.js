@@ -10,7 +10,9 @@
    0.4.0: an "Active plans" stack (every unfinished plan + plans finished in the last 10 min; a tap scrolls to the session),
    per-session task queues, idle/ended sessions in one collapsed section, finished agents behind a toggle, and
    crew_hub/dismiss {machine, session, agents?, session_dismissed?} for "Clear finished" and the idle rows' Dismiss (x).
-   The integration filters dismissed items out of the feed for every device. */
+   The integration filters dismissed items out of the feed for every device.
+   0.5.0: token chips (session meta "312k tok · 94% cached" from session.tokens, agent meta "48k tok" from agent.tokens)
+   and a dim "from tasks" tag on plan strips whose plan.source is "tasks" (derived from the built-in task list). */
 (() => {
 const FONT_HREF = "https://fonts.googleapis.com/css2?family=Londrina+Solid:wght@400;900&family=Jost:wght@400;500;600&display=swap";
 
@@ -56,6 +58,7 @@ h2{font-size:1.45rem} h3{font-size:1.1rem}
 .flow.strip h3{font-size:1.1rem;overflow-wrap:anywhere}
 .flow.strip .bar{height:8px}
 .flow .where{color:#5c5446;font-size:.8rem;font-weight:400;min-width:0;overflow-wrap:anywhere}
+.flow .src{color:#5c5446;font-size:.72rem;font-weight:400;letter-spacing:.06em}
 .plans .more{justify-self:start}
 .qbox{display:grid;gap:6px;min-width:0}
 .qbox .btns{gap:6px}
@@ -166,6 +169,23 @@ function hm(iso) { const t = ms(iso); if (t == null) return ""; try { return new
 const str = v => (v == null ? "" : String(v));
 const arr = v => (Array.isArray(v) ? v : []);
 const cmpDesc = (a, b) => (ms(b) ?? 0) - (ms(a) ?? 0);
+// Compact token counts: 950, 4.2k, 312k, 1.4M, 12M.
+function fmtTok(n) {
+  n = Math.max(0, Math.round(Number(n) || 0));
+  if (n < 1000) return String(n);
+  if (n < 9950) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  if (n < 999500) return Math.round(n / 1000) + "k";
+  if (n < 9950000) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  return Math.round(n / 1e6) + "M";
+}
+// "312k tok" (+ " · 94% cached" when a cache-hit ratio is given); "" without token data.
+function tokText(t, withHit) {
+  if (!t || typeof t !== "object") return "";
+  const sum = ["in", "out", "cacheRead", "cacheWrite"].reduce((a, k) => a + (Number(t[k]) || 0), 0);
+  if (!(sum > 0)) return "";
+  const hit = Number(t.cacheHit);
+  return fmtTok(sum) + " tok" + (withHit && t.cacheHit != null && Number.isFinite(hit) ? ` · ${Math.round(hit * 100)}% cached` : "");
+}
 
 class CrewHubCard extends HTMLElement {
   constructor() {
@@ -387,7 +407,8 @@ class CrewHubCard extends HTMLElement {
       const total = Math.max(0, Number(p.total ?? tasks.length) || 0);
       const done = fin ? total : Math.min(Math.max(0, Number(p.done ?? tasks.filter(t => t.status === "done").length) || 0), total);
       out.push({key: this._key(x), title: str(p.title) || "Untitled plan", phase: fin ? "finished" : str(p.phase || "running"),
-        done, total, fin, where: [x.s.name || x.s.project || "Session", x.mname].map(str).join(" · "), at: at ?? 0});
+        done, total, fin, where: [x.s.name || x.s.project || "Session", x.mname].map(str).join(" · "), at: at ?? 0,
+        tasks: p.source === "tasks"});
     }
     // Unfinished plans first, newest first; then the recently finished ones.
     return out.sort((a, b) => (a.fin - b.fin) || (b.at - a.at));
@@ -395,7 +416,7 @@ class CrewHubCard extends HTMLElement {
 
   _syncPlans() {
     const plans = this._plans(), more = this._open.has("plans");
-    const sig = JSON.stringify([plans.map(p => [p.key, p.title, p.phase, p.done, p.total, p.where]), more]);
+    const sig = JSON.stringify([plans.map(p => [p.key, p.title, p.phase, p.done, p.total, p.where, p.tasks]), more]);
     if (sig === this._planSig) return;
     this._planSig = sig;
     const box = this._el("section", "plans");
@@ -421,6 +442,7 @@ class CrewHubCard extends HTMLElement {
     meta.append(this._el("span", "phase", p ? p.phase : "idle"));
     if (p && p.total) meta.append(this._el("span", null, `${p.done} of ${p.total} accepted`));
     if (p) meta.append(this._el("span", "where", p.where));
+    if (p && p.tasks) meta.append(this._el("span", "src", "from tasks"));
     sec.append(bar, meta);
     if (p) {
       sec.tabIndex = 0;
@@ -565,6 +587,8 @@ class CrewHubCard extends HTMLElement {
     if (s.localName && str(s.localName) !== str(s.name)) m.append(this._el("span", null, str(s.localName)));
     if (s.model) m.append(this._el("span", null, str(s.model).replace(/^claude-/, "")));
     if (typeof s.costUsd === "number" && isFinite(s.costUsd)) m.append(this._el("span", null, "$" + s.costUsd.toFixed(2)));
+    const tk = tokText(s.tokens, true);
+    if (tk) m.append(this._el("span", "tok", tk));
     if (s.updatedAt) { const sp = this._el("span"); this._tickText(sp, () => "active " + agoMin(s.updatedAt)); m.append(sp); }
     if (offline) m.append(this._el("span", null, "computer offline"));
     if (unconfigured) m.append(this._el("span", null, "unconfigured"));
@@ -992,6 +1016,8 @@ class CrewHubCard extends HTMLElement {
     }
     const steps = Number(a.steps) || 0;
     mm.append(this._el("span", null, steps + " step" + (steps === 1 ? "" : "s")));
+    const tk = tokText(a.tokens, false);
+    if (tk) mm.append(this._el("span", "tok", tk));
     if (status === "stopped" && a.stopReason) mm.append(this._el("span", null, str(a.stopReason)));
     c.append(mm);
     const cur = a.current && a.current.text ? a.current : null;

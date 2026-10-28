@@ -150,7 +150,28 @@ to Home Assistant over HTTPS instead, through the same public address you use fo
   no secrets). The text is `plugins/crew-hub/templates/plan-file-rule.md`: every savvy-flow plan (and any multi-step
   plan with agents) is also written as a whole file to `~/.claude/crew-hub/plans/<local session_id>.json`.
 
-## The card (integration 0.4.0)
+## Plans from the task list and token insight (plugin 0.5.0)
+
+- **Plans without a plan file** (Crew Flow, `docs/CREW-FLOW.md`): when a session has no plan file, crew-hubd builds
+  `session.plan` from Claude Code's built-in task list (TaskCreate/TaskUpdate), at zero token cost. It does so only once
+  the list has at least 2 tasks, or any task has a tier prefix. Subjects may start with `[heavy|careful|medium|light] `
+  (the tier; any case) and `Project: ` (either order); both are stripped from the task title, the project only when every
+  task has the same one. Statuses: pending → queued, in_progress → running, completed → done, deleted tasks disappear.
+  An agent joins a task by an explicit `#<taskId>` at the end of its Agent `description`, else by an exact
+  case-insensitive title match (tier prefix and `#id` stripped, with or without the project prefix). A joined running
+  agent makes its task running; a joined agent that ended failed or stopped makes it failed unless the orchestrator
+  completes it. Phase: `plan` (no joined agent yet), `delegate` (a joined agent runs), `review` (joined agents all
+  finished, tasks still open), `finished` (all completed). Title: `<Project>: <n> tasks`, else the session name.
+  `plan.source` is `"file"` or `"tasks"`; the plan file always wins. Sync (foreground) Agent calls report their
+  description only when they finish, so they join then; background agents (the default) join at once.
+- **Tokens**: `session.tokens {in, out, cacheRead, cacheWrite, cacheHit, turns}` sums the main thread's assistant usage
+  in the session transcript (subagents not included; `turns` = API calls; `cacheHit` = cacheRead / (in + cacheRead +
+  cacheWrite)). `agent.tokens {in, out, cacheRead, cacheWrite}` sums the agent's own transcript
+  (`<session>/subagents/agent-<id>.jsonl`): every 15 s while it runs, once more when it ends (from the SubagentStop
+  `agent_transcript_path`, kept local like the session transcript path). Transcripts are read incrementally from a
+  remembered offset, at most 4 MB per file and 16 MB per 3 s pass, so a first look at a large history takes a few passes.
+
+## The card (integration 0.5.0)
 
 - **Active plans**: one paper strip per unfinished plan on any machine and session (newest first), plus plans that
   finished in the last 10 minutes (chip "finished", bar full). Each strip shows the title, the bar, the phase,
@@ -160,6 +181,9 @@ to Home Assistant over HTTPS instead, through the same public address you use fo
   (running tasks and the next 3 queued; done tasks behind an "N done" toggle), its running agents, and its finished
   agents (done, failed, stopped) behind an "N finished" toggle with **Clear finished**. Stopped agents show a dim
   "stopped" chip and the stop reason; the session's local name shows in the meta row when it differs from its name.
+- **Tokens** (0.5.0): the session meta row shows e.g. "312k tok · 94% cached", each agent "48k tok" (all four counts
+  summed). A plan derived from the task list looks like a file plan (tiers in the queue, task titles on joined agents)
+  and its strip carries a small dim "from tasks" tag.
 - **Idle sessions (N)**: idle and ended sessions, collapsed by default, one row each (name, machine, last activity,
   one line of summary). Tap a row to open the full block with its message box; **×** dismisses the session.
 - **Dismiss is shared**: Clear finished and × call the admin-only websocket command `crew_hub/dismiss`
@@ -243,7 +267,7 @@ without an answer, and acks every other refusal (`retained`, `stale` (more than 
 - Card source: `card/crew-hub-card.js`. After editing, run `scripts/sync-card.sh` (copies it into
   `custom_components/crew_hub/www/`; a test fails if the copies differ). Previews: `card/preview.html`,
   `card/preview-hass.html` (fake hass feed + fake command answers). Browser check of the controls:
-  `pw-node card/verify-controls.js` (writes `card/screenshots/card-v040-390.png` and `card-v040-1280.png`).
+  `pw-node card/verify-controls.js` (writes `card/screenshots/card-v050-390.png` and `card-v050-1280.png`).
 - Stdlib tests: `python3 -m unittest discover -s tests`.
 - Home Assistant tests: `/home/node/.local/opt/ha-test-venv/bin/python -m pytest tests/ha`
   (venv with `pytest-homeassistant-custom-component`, Python 3.14).

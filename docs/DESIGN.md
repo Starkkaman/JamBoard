@@ -67,13 +67,36 @@ sessions: [{
   waiting?: {kind: permission | question | input, tool, text, requestId?, since?, questions?, hubCanAnswer?},
   summary (last assistant message, first line, ≤200 chars), model, effort,
   ctx {used, max}, costUsd (estimated), startedAt, updatedAt,
+  tokens?: {in, out, cacheRead, cacheWrite, cacheHit, turns},                  ← 0.5.0, session transcript (main thread)
   tasks: [{id, subject, status pending|in_progress|completed}],          ← TaskCreate/TaskUpdate tools
-  plan?: {title, phase, done, total, finished, updatedAt,
-          tasks: [{id, title, tier, status queued|running|done|failed, order, agentId, summary}]},   ← plan file
+  plan?: {title, phase, done, total, finished, updatedAt, source "file"|"tasks",
+          tasks: [{id, title, tier, status queued|running|done|failed, order, agentId, summary}]},   ← plan file, else task list
   agents: [{id, type, title, model, status running|done|failed|stopped, startedAt, endedAt,
-            stopReason ("session restarted" | "stopped by session" | "inactive" | null), steps, current {text, at}, trail: [{text, at}] (last 3)}]
+            stopReason ("session restarted" | "stopped by session" | "inactive" | null), steps, current {text, at}, trail: [{text, at}] (last 3),
+            tokens?: {in, out, cacheRead, cacheWrite}}]                         ← 0.5.0, agent transcript
 }]
 ```
+
+0.5.0 plans from the task list (state.py `derive_plan`, docs/CREW-FLOW.md): without a plan file (missing or invalid),
+`plan` is derived from `tasks` once there are ≥ 2 tasks or any subject has a tier prefix (TodoWrite lists never count).
+Subject prefixes `[heavy|careful|medium|light] ` and `Project: ` (either order) give the tier and the project; the project
+is stripped from titles only when all tasks share it, and then the title is `<Project>: <n> tasks` (else the session name,
+computed without the plan). Agent ↔ task join: `#<taskId>` at the end of the agent title (Agent `description`), else an
+exact case-insensitive title match (tier prefix stripped; with or without the project prefix; a subject clipped with "…"
+matches as a prefix), preferring a task that is not completed and not held by a running agent; the newest joined agent is
+`agentId`. Task status: completed → done; a joined agent running → running; newest joined agent failed/stopped → failed;
+in_progress → running; else queued. Phase: all completed → `finished` (finished true); a joined agent running →
+`delegate`; some joined → `review`; else `plan`. done = completed count, total = task count. TaskUpdate also renames
+(`subject`, clipped like TaskCreated) and deletes (statusChange to deleted, or input status deleted). A sync Agent call's
+description arrives only at its PostToolUse (when it ends), so only background agents join while running.
+
+0.5.0 tokens (state.py `read_usage`): per transcript a reader state (inode, offset, totals, last 16 message ids) reads only
+complete new lines, ≤ 4 MB per file and ≤ 16 MB per enrich pass (newest sessions first); a replaced or shrunk file
+starts over. Usage lines repeat per content block with the same `message.id`, so a repeated id adds only what grew.
+Session: main-thread (`isSidechain` false) usage of `transcript_path`; `turns` = distinct assistant messages; `cacheHit`
+= cacheRead / (in + cacheRead + cacheWrite), 3 decimals. Agent: `<transcript_path minus .jsonl>/subagents/agent-<id>.jsonl`
+(verified on disk, 2.1.3xx) or SubagentStop `agent_transcript_path` (spool `atp`, local only like `tp`), every 15 s while
+running and until fully read after it ends. Paths and reader states are `_` keys, never published.
 
 0.4.1 waiting rules (state.py): `waiting` means a prompt is open **right now**. The live registry entry
 (`sessions/<pid>.json`) is authoritative: `waiting` shows waiting (text from the crew-hook request, else the
@@ -110,7 +133,7 @@ sessions (haiku, ≈ $0.06). Details and exact JSON are in `docs/evidence/bridge
 | `SubagentStart` = `{agent_id, agent_type}` only, **no description** | ✅ verified |
 | `PostToolUse` Agent → `tool_response {agentId, description, resolvedModel, isAsync}`, so title and model join on agentId | ✅ verified |
 | Tool calls made inside a subagent carry `agent_id` + `agent_type`, and Bash `tool_input.description` is the plain-English step | ✅ verified |
-| `SubagentStop {agent_id, last_assistant_message, background_tasks[]}` | ✅ verified |
+| `SubagentStop {agent_id, last_assistant_message, background_tasks[], agent_transcript_path}` | ✅ verified (path in the 2.1.295 sample; agent transcripts at `<session>/subagents/agent-<id>.jsonl`, seen on disk 2026-10-27) |
 | `TaskCreated / TaskCompleted {task_id, task_subject, task_description}`; PostToolUse TaskUpdate has `statusChange {from,to}` | ✅ verified (in_progress transition only via TaskUpdate) |
 | `Stop {last_assistant_message, background_tasks}`, `SessionEnd {reason}`, `SessionStart {source}` | ✅ verified |
 | Remote Control sessions run as `claude --print --session-id cse_X`; `cse_X` ↔ CCR `session_X` (same suffix) | ✅ verified (ps + list_sessions) |

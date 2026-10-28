@@ -54,6 +54,14 @@
           "max": 200000
         },
         "costUsd": 3.84,
+        "tokens": {
+          "in": 41200,
+          "out": 96400,
+          "cacheRead": 3020000,
+          "cacheWrite": 182000,
+          "cacheHit": 0.931,
+          "turns": 412
+        },
         "startedAt": "2026-10-26T13:05:12Z",
         "updatedAt": "2026-10-26T14:29:58Z",
         "tasks": [],
@@ -123,7 +131,8 @@
               "order": 7,
               "agentId": "a7f3c2e1d9b84a60"
             }
-          ]
+          ],
+          "source": "file"
         },
         "agents": [
           {
@@ -152,7 +161,13 @@
                 "text": "Run IG parser unit tests",
                 "at": "2026-10-26T14:28:30Z"
               }
-            ]
+            ],
+            "tokens": {
+              "in": 1200,
+              "out": 8800,
+              "cacheRead": 34000,
+              "cacheWrite": 4000
+            }
           },
           {
             "id": "a2e8d4c6b1f07a92",
@@ -335,7 +350,8 @@
               "status": "queued",
               "order": 4
             }
-          ]
+          ],
+          "source": "file"
         },
         "agents": [
           {
@@ -421,22 +437,30 @@
           "max": 200000
         },
         "costUsd": null,
+        "tokens": {
+          "in": 4000,
+          "out": 14000,
+          "cacheRead": 280000,
+          "cacheWrite": 14000,
+          "cacheHit": 0.94,
+          "turns": 96
+        },
         "startedAt": "2026-10-26T11:50:00Z",
         "updatedAt": "2026-10-26T14:29:50Z",
         "tasks": [
           {
             "id": "1",
-            "subject": "Write the snapshot fixture",
+            "subject": "[light] Crew Hub: Write the snapshot fixture",
             "status": "completed"
           },
           {
             "id": "2",
-            "subject": "Build the Lovelace card",
+            "subject": "[careful] Crew Hub: Build the Lovelace card",
             "status": "in_progress"
           },
           {
             "id": "3",
-            "subject": "Draft the crew_hub integration",
+            "subject": "[medium] Crew Hub: Draft the crew_hub integration",
             "status": "pending"
           }
         ],
@@ -444,7 +468,7 @@
           {
             "id": "c1d2e3f405162738",
             "type": "savvy-flow:savvy-careful",
-            "title": "Card + integration UX fixes 0.4.0",
+            "title": "Build the Lovelace card",
             "model": "claude-opus-5-5",
             "status": "running",
             "startedAt": "2026-10-26T14:05:00Z",
@@ -459,22 +483,72 @@
                 "text": "Add crew_hub/dismiss websocket",
                 "at": "2026-10-26T14:20:00Z"
               }
-            ]
+            ],
+            "tokens": {
+              "in": 600,
+              "out": 5400,
+              "cacheRead": 61000,
+              "cacheWrite": 9000
+            }
           },
           {
             "id": "c2e3f40516273849",
             "type": "savvy-flow:savvy-medium",
-            "title": "Reporter: human session names",
+            "title": "Write the snapshot fixture #1",
             "model": "claude-opus-5-5",
             "status": "done",
             "startedAt": "2026-10-26T13:40:00Z",
             "endedAt": "2026-10-26T14:02:00Z",
             "steps": 26,
             "summary": "Daemon sends the CCR title as the session name.",
-            "trail": []
+            "trail": [],
+            "tokens": {
+              "in": 300,
+              "out": 2700,
+              "cacheRead": 25000,
+              "cacheWrite": 3000
+            }
           }
         ],
-        "localName": "project-c1"
+        "localName": "project-c1",
+        "plan": {
+          "title": "Crew Hub: 3 tasks",
+          "phase": "delegate",
+          "done": 1,
+          "total": 3,
+          "finished": false,
+          "updatedAt": "2026-10-26T14:27:00Z",
+          "source": "tasks",
+          "tasks": [
+            {
+              "id": "1",
+              "title": "Write the snapshot fixture",
+              "tier": "light",
+              "status": "done",
+              "order": 1,
+              "agentId": "c2e3f40516273849",
+              "summary": null
+            },
+            {
+              "id": "2",
+              "title": "Build the Lovelace card",
+              "tier": "careful",
+              "status": "running",
+              "order": 2,
+              "agentId": "c1d2e3f405162738",
+              "summary": null
+            },
+            {
+              "id": "3",
+              "title": "Draft the crew_hub integration",
+              "tier": "medium",
+              "status": "queued",
+              "order": 3,
+              "agentId": null,
+              "summary": null
+            }
+          ]
+        }
       },
       {
         "id": "4d2b9c71-8a0e-4f3b-b5d6-91c7e2a0f4b8",
@@ -731,7 +805,8 @@
               "status": "done",
               "order": 3
             }
-          ]
+          ],
+          "source": "file"
         }
       },
       {
@@ -780,7 +855,8 @@
               "status": "done",
               "order": 2
             }
-          ]
+          ],
+          "source": "file"
         }
       }
     ]

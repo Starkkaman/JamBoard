@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -140,7 +141,7 @@ class PairTest(unittest.TestCase):
 
     # ---- "t": "mqtt" codes: a new command secret for a machine already on MQTT ----
     def write_mqtt_setup(self, machine="nas", port=1883, commands=True, transport="mqtt"):
-        os.makedirs(self.hub_dir, 0o700)
+        os.makedirs(self.hub_dir, 0o700, exist_ok=True)
         cfg = {"machineId": machine, "machineName": "NAS", "prefix": "crew", "summaries": True,
                "mqtt": {"host": "127.0.0.1", "port": port, "username": "crew-nas"},
                "commands": {"enabled": commands, "folders": {"project": {"path": "/srv/project", "label": "Projects"}},
@@ -214,7 +215,7 @@ class PairTest(unittest.TestCase):
             (dict(transport="webhook"), "uses the webhook transport"),
         ]
         for setup, msg in cases:
-            self.tmp.cleanup()
+            shutil.rmtree(self.home, ignore_errors=True)  # TemporaryDirectory.cleanup() is one-shot on 3.9
             os.makedirs(self.home, exist_ok=True)
             self.write_mqtt_setup(**setup)
             before = (self.raw("config.json"), self.raw("secrets.json"))
@@ -225,8 +226,8 @@ class PairTest(unittest.TestCase):
             self.assert_no_echo(out + err, code, NEW_SECRET, SECRET, MQTT_PW)
 
         # an mqtt config without a broker host
-        self.tmp.cleanup()
-        os.makedirs(self.hub_dir)
+        shutil.rmtree(self.home, ignore_errors=True)  # TemporaryDirectory.cleanup() is one-shot on 3.9
+        os.makedirs(self.hub_dir, exist_ok=True)
         with open(os.path.join(self.hub_dir, "config.json"), "w") as f:
             json.dump({"machineId": "nas", "transport": "mqtt"}, f)
         rc, out, err = self.run_pair(code + "\n", "--no-daemon")
