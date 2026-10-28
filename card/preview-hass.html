@@ -16,6 +16,12 @@
 // crew_hub/dismiss is answered after 300 ms with {ok: true} and, like the integration's store, the machine is pushed again
 // without the dismissed agents (and dismissed sessions while idle/ended); window.__dismissed records the requests.
 // ?refuse=1 makes the subscription fail the way a non-admin user or a missing integration does.
+// ?stress=1 replaces nas with a busy evening (stress.js-free, seeded): 5 working sessions with plans, 6-10 running agents
+// each that start/finish/fail, changing note/summary lengths, task statuses and done counts advancing, one session flipping
+// working/waiting, one going idle and back, finished agents pruned like crew-hubd (6 newest, 12 agents), tokens/cost growing.
+// &manual=1 stops the timer; window.__stressTick() then runs one update (card/measure-jumps.js drives it).
+// &scroller=1 puts the card inside a shadow-DOM scroll container (like HA's view), &noanchor=1 turns off the browser's
+// own scroll anchoring (overflow-anchor:none, like Safari) so the card's own compensation is what's measured.
 const FIXTURE_NOW = Date.parse("2026-10-26T14:30:00Z");
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 function shift(v, delta) {
@@ -41,6 +47,107 @@ function publicView(id, view) {
   }
   return Object.assign({}, view, {snapshot: Object.assign({}, view.snapshot, {sessions})});
 }
+
+// ---- ?stress=1: a busy evening on nas, deterministic (seeded) so before/after measurements compare ----
+const STRESS = params.has("stress");
+const stress = (() => {
+  let seed = Number(params.get("seed")) || 7;
+  const rnd = () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const iso = t => new Date(t).toISOString();
+  const WORDS = ["Read", "Grep", "Edit", "Run tests for", "Build", "Check", "Compare", "Patch", "Measure", "Trace", "Write"];
+  const THINGS = ["the IG segment parser", "state.py fold rules", "the Lovelace card layout at 390 px", "MQTT discovery payloads",
+    "the ExoPlayer HDR path on the Hisense TV over adb with the debug build", "plan strip", "tokens", "the webhook signer",
+    "BDMV/PLAYLIST/00000.mpls and every clip it references, including the angle and the subtitle streams", "README"];
+  const note = () => { const n = 1 + Math.floor(rnd() * 3); let t = pick(WORDS) + " " + pick(THINGS);
+    for (let i = 1; i < n; i++) t += ", then " + pick(WORDS).toLowerCase() + " " + pick(THINGS); return t; };
+  const SUMS = ["Done.", "Fixed and verified with the unit tests.", "Blocked: the TV refused the adb connection after the reboot, retried three times and gave up; needs a fresh pairing code from Isaac.",
+    "Patched 3 files; 47 tests pass.", "Measured 120 Hz PWM on the 7 Pro at 30 % brightness, matches the reference meter within 2 %."];
+  const TIERS = ["light", "medium", "careful", "heavy"];
+  let now = Date.now(), nid = 1, tick = 0;
+  const mkAgent = (title, startedAt) => ({id: "ag" + String(nid++).padStart(14, "0"), type: "crew-flow:crew-" + pick(TIERS), title,
+    model: "claude-opus-5-5", status: "running", startedAt: iso(startedAt), endedAt: null, stopReason: null, steps: 1 + Math.floor(rnd() * 20),
+    current: {text: note(), at: iso(startedAt)}, trail: [], tokens: rnd() < .5 ? null : {in: 900, out: 4000, cacheRead: 20000, cacheWrite: 3000}});
+  const mkPlan = (name, n, t) => ({title: name + ": plan " + (1 + Math.floor(rnd() * 9)), phase: "build", done: 0, total: n, finished: false,
+    updatedAt: iso(t), source: rnd() < .4 ? "tasks" : "file",
+    tasks: [...Array(n)].map((_, i) => ({id: "t" + (i + 1), title: note().slice(0, 30 + Math.floor(rnd() * 60)), tier: pick(TIERS), status: "queued", order: i + 1}))});
+  const NAMES = ["Jamfin", "Crew Hub", "NerveOS: resume stopped agent work", "Retro frontend", "Flicker meter"];
+  const sessions = NAMES.map((name, i) => {
+    const t0 = now - (i + 1) * 7 * 60000;
+    const s = {id: "stress-" + i, kind: i % 2 ? "bg" : "interactive", controls: i % 2 ? ["send", "answer", "interrupt", "stop"] : ["send", "answer"],
+      name, project: name.toLowerCase().split(/\W/)[0], status: "working", summary: SUMS[i % SUMS.length], model: "claude-opus-5-5",
+      ctx: {used: 60000 + i * 20000, max: 200000}, costUsd: 1 + i * 2.3, startedAt: iso(t0), updatedAt: iso(now - i * 20000), tasks: [],
+      tokens: {in: 20000, out: 50000 + i * 1000, cacheRead: 800000 + i * 300000, cacheWrite: 60000, cacheHit: .9},
+      plan: mkPlan(name, 12 + i, now - i * 60000), agents: []};
+    if (i === 2) s.localName = "project-4f";
+    const n = 6 + Math.floor(rnd() * 5);
+    for (let k = 0; k < n; k++) {
+      const task = s.plan.tasks[k];
+      const a = mkAgent(task.title, t0 + k * 30000);
+      task.status = "running"; task.agentId = a.id;
+      if (i === 2 && k === 3) { a.title = task.title = "Watch: sensor bridge MQTT discovery"; a.keep = true; }
+      s.agents.push(a);
+    }
+    return s;
+  });
+  const idle = ["Echo Show kiosk", "Sendspin Speaker", "Aero 15 steambox"].map((name, i) => ({id: "stress-idle-" + i, kind: "interactive",
+    controls: ["send", "answer"], name, status: "idle", summary: SUMS[(i + 2) % SUMS.length], updatedAt: iso(now - (i + 1) * 3600000), agents: [], tasks: []}));
+  const machine = {id: "nas", name: "nas", version: "0.5.0", updatedAt: iso(now),
+    commands: {enabled: true, folders: [{key: "crew-hub", label: "Crew Hub"}], models: ["claude-opus-5-5"], permissionModes: ["default", "auto"]}};
+  const snapshot = () => structuredClone({machine, sessions: [...sessions, ...idle]});
+  function stepSession(s, i) {
+    let touched = false;
+    const touch = () => { touched = true; };
+    if (i === 1 && tick % 5 === 0) {  // working <-> waiting
+      if (s.status === "working") { s.status = "waiting"; s.waiting = {kind: "permission", tool: "Bash", text: "Run the integration tests", requestId: "req_s" + tick, since: iso(now), hubCanAnswer: true}; }
+      else { s.status = "working"; delete s.waiting; }
+      touch();
+    }
+    if (i === 4 && tick % 8 === 4) { s.status = s.status === "idle" ? "working" : "idle"; touch(); }
+    if (rnd() < .3) { s.summary = pick(SUMS) + (rnd() < .5 ? " " + note() : ""); touch(); }
+    for (const a of s.agents) {
+      if (a.status !== "running") continue;
+      if (rnd() < .5) {
+        a.trail = [...a.trail, a.current].slice(-3); a.current = {text: note(), at: iso(now)}; a.steps += 1 + Math.floor(rnd() * 3);
+        if (a.tokens || rnd() < .3) { const t = a.tokens || {in: 0, out: 0, cacheRead: 0, cacheWrite: 0}; t.out += 3000; t.cacheRead += 40000 + Math.floor(rnd() * 900000); a.tokens = t; }
+        touch();
+      }
+      if (!a.keep && rnd() < .08) {
+        a.status = rnd() < .2 ? "failed" : "done"; a.endedAt = iso(now); a.summary = pick(SUMS);
+        const t = s.plan.tasks.find(x => x.agentId === a.id);
+        if (t) { t.status = a.status === "failed" ? "failed" : "done"; t.summary = a.summary; }
+        touch();
+      }
+    }
+    const running = s.agents.filter(a => a.status === "running").length;
+    if (s.status !== "idle" && (running < 6 || (running < 10 && rnd() < .25))) {
+      let t = s.plan.tasks.find(x => x.status === "queued");
+      if (!t && s.plan.tasks.every(x => x.status === "done" || x.status === "failed")) { s.plan.finished = true; s.plan.phase = "finished"; }
+      if (t) {
+        const a = mkAgent(t.title, now); t.status = "running"; t.agentId = a.id; s.agents.push(a); touch();
+        // crew-hubd: at most 12 agents, the oldest finished one goes
+        const f = s.agents.filter(x => x.status !== "running").sort((p, q) => Date.parse(p.endedAt) - Date.parse(q.endedAt));
+        if (s.agents.length > 12 && f.length) s.agents = s.agents.filter(x => x !== f[0]);
+      }
+    }
+    // crew-hubd: keep the 6 newest finished agents
+    const fin = s.agents.filter(a => a.status !== "running").sort((p, q) => Date.parse(q.endedAt) - Date.parse(p.endedAt));
+    if (fin.length > 6) { const drop = new Set(fin.slice(6)); s.agents = s.agents.filter(a => !drop.has(a)); }
+    s.plan.done = s.plan.tasks.filter(x => x.status === "done").length;
+    if (touched) {
+      s.updatedAt = iso(now); s.plan.updatedAt = iso(now);
+      s.costUsd += .01 + rnd() * .2; s.tokens.cacheRead += Math.floor(rnd() * 400000); s.tokens.out += 2000;
+    }
+  }
+  function step() {
+    now = Date.now(); tick++;
+    sessions.forEach(stepSession);
+    machine.updatedAt = iso(now);
+    return snapshot();
+  }
+  return {snapshot, step};
+})();
 
 class FakeConnection {
   constructor(fixture) { this.fixture = fixture; this.listeners = {}; }
@@ -79,6 +186,19 @@ class FakeConnection {
     const pub = () => Object.fromEntries(Object.entries(machines).map(([id, v]) => [id, publicView(id, v)]));
     this.push = id => cb({type: "machine", id, data: publicView(id, machines[id])});
     setTimeout(() => cb({type: "full", machines: pub()}), 0);
+    if (STRESS) {
+      machines.nas = {status: "online", snapshot: stress.snapshot(), receivedAt: Date.now(), configured: true};
+      const tick = () => {
+        machines.nas = {status: "online", snapshot: stress.step(), receivedAt: Date.now(), configured: true};
+        cb({type: "machine", id: "nas", data: publicView("nas", structuredClone(machines.nas))});
+        window.__feed.updateSent = true;
+        window.__feed.updates++;
+      };
+      window.__stressTick = tick;
+      setTimeout(() => cb({type: "full", machines: pub()}), 0);
+      if (!params.has("manual")) setTimeout(() => { tick(); setInterval(tick, 1000); }, 2000);
+      return () => { window.__feed.unsubscribes++; };
+    }
     const update = () => {
       const nas = structuredClone(machines.nas);
       const now = new Date().toISOString();
@@ -101,6 +221,16 @@ class FakeConnection {
 
 (async () => {
   const card = document.getElementById("card");
+  if (params.has("scroller")) {
+    // Like HA's view: the card sits in light DOM, slotted into a scrolling div inside a shadow root.
+    const host = document.createElement("div");
+    host.id = "fake-ha-view";
+    const sr = host.attachShadow({mode: "open"});
+    sr.innerHTML = '<style>:host{display:block}.scroller{height:100vh;overflow-y:auto}</style><div class="scroller"><slot></slot></div>';
+    card.before(host);
+    host.append(card);
+    if (params.has("noanchor")) sr.querySelector(".scroller").style.overflowAnchor = "none";
+  } else if (params.has("noanchor")) document.documentElement.style.overflowAnchor = document.body.style.overflowAnchor = "none";
   card.setConfig({type: "custom:crew-hub-card"});
   const raw = await (await fetch("fixtures/snapshot-sample.json")).json();
   const connection = new FakeConnection(shift(raw, Date.now() - FIXTURE_NOW));

@@ -12,7 +12,14 @@
    crew_hub/dismiss {machine, session, agents?, session_dismissed?} for "Clear finished" and the idle rows' Dismiss (x).
    The integration filters dismissed items out of the feed for every device.
    0.5.0: token chips (session meta "312k tok · 94% cached" from session.tokens, agent meta "48k tok" from agent.tokens)
-   and a dim "from tasks" tag on plan strips whose plan.source is "tasks" (derived from the built-in task list). */
+   and a dim "from tasks" tag on plan strips whose plan.source is "tasks" (derived from the built-in task list).
+   0.5.1: no layout jumps while many agents run. Stable order: sessions (per section), plan strips and agents keep the
+   order in which they first appeared (initial order as before), a status change never re-sorts, new items append.
+   Fixed heights: agent rows (name, meta, one now/summary line, 3 trail lines) and plan strips (title, bar, one meta line)
+   have a fixed line count, text truncates with an ellipsis (full text in title), numbers use tabular figures and
+   min-widths. Finished agents stay in place (dimmed) until crew-hubd prunes them or Clear finished dismisses them.
+   Nodes are patched in place (textContent) instead of rebuilt, and when content above the viewport changes height the
+   card scrolls its scroll container (HA's view or the page) by the difference, so what is on screen stays put. */
 (() => {
 const FONT_HREF = "https://fonts.googleapis.com/css2?family=Londrina+Solid:wght@400;900&family=Jost:wght@400;500;600&display=swap";
 
@@ -42,11 +49,13 @@ h2{font-size:1.45rem} h3{font-size:1.1rem}
 .bar{height:10px;background:#cfc3a6;position:relative}
 .bar i{position:absolute;inset:0 auto 0 0;background:var(--red);width:0}
 .flowmeta{display:flex;gap:6px 16px;flex-wrap:wrap;font-weight:500;font-variant-numeric:tabular-nums}
+.flow.strip .flowmeta{flex-wrap:nowrap;align-items:baseline;min-width:0;overflow:hidden}
+.flow.strip .flowmeta>*{flex:none;white-space:nowrap}
 .phase{background:var(--ink);color:var(--paper);padding:2px 8px;font:600 .72rem/1.4 var(--body);letter-spacing:.14em;text-transform:uppercase}
 .queue{display:grid;gap:4px;margin:0;padding:0;list-style:none}
 .queue li{display:flex;gap:10px;align-items:baseline;font-weight:500;min-width:0}
 .queue li b{font:600 .66rem/1 var(--body);letter-spacing:.12em;text-transform:uppercase;padding:4px 6px;border:1.5px solid currentColor;flex:none}
-.queue li.done{opacity:.55}.queue li span{min-width:0;overflow-wrap:anywhere}
+.queue li.done{opacity:.55}.queue li>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .queue .tier{color:var(--dim);font-weight:400}
 .queue li.more{color:var(--dim);font-weight:400;font-size:.85rem}
 
@@ -55,9 +64,10 @@ h2{font-size:1.45rem} h3{font-size:1.1rem}
 .flow.strip{padding:12px 16px 16px;gap:8px;clip-path:polygon(0 0,100% 0,100% 74%,97% 100%,0 100%)}
 .flow.strip[role=button]{cursor:pointer}
 .flow.strip:focus-visible{outline:2px solid var(--ochre);outline-offset:2px}
-.flow.strip h3{font-size:1.1rem;overflow-wrap:anywhere}
+.flow.strip h3{font-size:1.1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-bottom:.08em}
 .flow.strip .bar{height:8px}
 .flow .where{color:#5c5446;font-size:.8rem;font-weight:400;min-width:0;overflow-wrap:anywhere}
+.flow.strip .flowmeta .where{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis}
 .flow .src{color:#5c5446;font-size:.72rem;font-weight:400;letter-spacing:.06em}
 .plans .more{justify-self:start}
 .qbox{display:grid;gap:6px;min-width:0}
@@ -65,15 +75,18 @@ h2{font-size:1.45rem} h3{font-size:1.1rem}
 
 /* sessions */
 .sessions{display:grid;gap:16px}
-.sess{background:var(--slab);display:grid;gap:10px;padding:14px 16px 16px 18px;border-left:6px solid var(--line)}
+.sess{background:var(--slab);display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:14px 16px 16px 18px;border-left:6px solid var(--line)}
 .sess.working{border-left-color:var(--ochre)} .sess.blocked{border-left-color:var(--red)} .sess.failed{border-left-color:var(--red)}
 .sess.idle,.sess.completed,.sess.review_ready{border-left-color:var(--teal)}
 .row{display:flex;gap:8px 12px;justify-content:space-between;align-items:baseline;flex-wrap:wrap}
 .name{min-width:0;overflow-wrap:anywhere}
-.chip{font:600 .66rem/1 var(--body);letter-spacing:.14em;text-transform:uppercase;padding:5px 7px;border:1.5px solid currentColor;flex:none}
+.chip{font:600 .66rem/1 var(--body);letter-spacing:.14em;text-transform:uppercase;padding:5px 7px;border:1.5px solid currentColor;flex:none;text-align:center}
+.sess .head .chip{min-width:5.8rem}  /* fits "needs you": a status change doesn't rewrap the name line */
 .c-working{color:var(--ochre)} .c-blocked,.c-failed{color:var(--red)} .c-idle,.c-completed,.c-review_ready,.c-done{color:var(--teal)} .c-queued{color:var(--dim)}
 .meta{display:flex;gap:4px 14px;flex-wrap:wrap;color:var(--dim);font-size:.85rem;font-variant-numeric:tabular-nums}
-.summary{min-width:0;overflow-wrap:anywhere}
+.summary{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta>span{min-height:1.5em} .meta .cost{min-width:3.6em} .meta .act{min-width:9.6em} .meta .elapsed{min-width:9.4em} .meta .steps{min-width:5.2em}
+.meta .tok{min-width:4.6em} .meta .tok.hit{min-width:11.4em}
 .waiting{border:1.5px solid var(--red);padding:6px 10px;min-width:0;overflow-wrap:anywhere}
 .waiting b{color:var(--red);font-weight:600}
 .ctx{height:5px;background:var(--line);position:relative;max-width:220px}
@@ -81,8 +94,11 @@ h2{font-size:1.45rem} h3{font-size:1.1rem}
 .ctx.hot i{background:var(--red)}
 
 /* agents inside a session */
-.agents{display:grid;gap:8px}
-.agent{background:var(--slab2);padding:10px 12px;display:grid;gap:6px;border-left:4px solid var(--line)}
+.agents{display:grid;grid-template-columns:minmax(0,1fr);gap:8px}
+.agent{background:var(--slab2);padding:10px 12px;display:grid;grid-template-columns:minmax(0,1fr);gap:6px;border-left:4px solid var(--line)}
+.agent .row{flex-wrap:nowrap;align-items:center}
+.agent .row .name{flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent.held{opacity:.6}
 .agent.running{border-left-color:var(--ochre)} .agent.done{border-left-color:var(--teal)} .agent.failed{border-left-color:var(--red)}
 .agent.stopped{border-left-color:var(--dim)} .c-stopped{color:var(--dim)}
 .fin{display:grid;gap:8px;min-width:0}
@@ -99,10 +115,12 @@ button.iopen{flex:1;min-width:0;display:grid;gap:2px;text-align:left;background:
 .iopen .is{color:var(--dim);font-size:.85rem;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .iopen[aria-expanded="true"]{background:var(--slab)}
 button.x{background:transparent;color:var(--dim);border:1.5px solid var(--line);min-width:44px;padding:0 12px;font-size:1.1rem;letter-spacing:0}
-.agent .now{display:flex;gap:8px;align-items:baseline;min-width:0}
-.agent .now span{min-width:0;overflow-wrap:anywhere}
+.agent .now{display:flex;gap:8px;align-items:baseline;min-width:0;height:1.5em}
+.agent .now span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent .now.fin span{color:var(--dim)}
 .trail{margin:0;padding:0;list-style:none;display:grid;gap:2px;color:var(--dim);font-size:.85rem}
-.trail li{display:flex;gap:8px;min-width:0}.trail li span{min-width:0;overflow-wrap:anywhere}
+.trail li{display:flex;gap:8px;min-width:0;height:1.5em}.trail li span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent.compact .now.blank,.agent.compact .trail li.blank,.agent.compact .meta .tok:empty{display:none}
 .trail time{font-variant-numeric:tabular-nums;flex:none}
 .muted{color:var(--dim);font-size:.85rem}
 .empty{color:var(--dim);background:var(--slab);padding:16px}
@@ -150,6 +168,9 @@ const AGENT = ["running", "done", "failed", "stopped"];
 const PLAN_TASK = ["queued", "running", "done", "failed"];
 const FINISHED_PLAN_MS = 10 * 60 * 1000;  // finished plans stay in the stack this long
 const MAX_STRIPS = 4, MAX_IDLE = 40, MAX_FINISHED = 20;
+const MAX_AGENT_ROWS = 12;  // agent rows in a session block (running + finished held in place; crew-hubd keeps 12 agents)
+const MAX_QUEUE = 4;        // task lines in a session's queue (plan order, not done), then "+N more"
+const TRAIL_LINES = 3;
 
 // Times arrive as epoch ms (crew-hubd snapshots) or ISO strings (fixtures).
 const ms = v => { const t = typeof v === "number" ? v : Date.parse(v); return Number.isFinite(t) ? t : null; };
@@ -235,7 +256,22 @@ class CrewHubCard extends HTMLElement {
     this._newSig = null;
     this._rows = new Map();    // "mid|sid" -> idle row parts
     this._open = new Set();    // open toggles: "plans", "row|<key>", "q|<key>" (done tasks), "fin|<key>" (finished agents)
-    this._planSig = null;
+    // 0.5.1 stable order: first-seen sequence numbers (sessions per section, plans); new items get the next number.
+    this._n = 0;
+    this._seq = new Map();     // session key -> {grp: "a"|"i", n}
+    this._planSeq = new Map(); // plan key -> n
+    this._strips = new Map();  // plan key -> strip parts (patched in place)
+    this._noAnchorUntil = 0;   // no scroll compensation while a strip tap's smooth scroll runs
+    this._onScreenRows = new Set();
+    // Persistent header and plans section.
+    this._hTop = this._renderHeader();
+    this._headSlot.append(this._hTop);
+    this._plansBox = this._el("section", "plans");
+    this._plansBox.setAttribute("aria-label", "Active plans");
+    this._plansLab = this._el("span", "label", "Active plans");
+    this._noPlan = this._strip(null);
+    this._moreBtn = this._btn("", "btn-o sm more", "plans|more", null, () => this._toggle("plans"));
+    this._flowSlot.append(this._plansBox);
   }
 
   connectedCallback() {
@@ -324,8 +360,81 @@ class CrewHubCard extends HTMLElement {
 
   /* ---- helpers ---- */
   _el(t, c, x) { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = str(x); return e; }
-  _tickText(node, fn) { node.textContent = fn(); this._tickers.push(() => { node.textContent = fn(); }); return node; }
-  _tick() { for (const f of this._tickers) f(); }
+  _tickText(node, fn) { const f = () => this._txt(node, fn()); f(); this._tickers.push(f); return node; }
+  _tick() { const an = this._anchor(); for (const f of this._tickers) f(); this._reanchor(an); }
+  // Patch text only when it changed (a rewrite with the same text still replaces the text node).
+  _txt(node, t, title) {
+    t = str(t);
+    if (node.textContent !== t) node.textContent = t;
+    if (title !== undefined) { if (title) { if (node.title !== t) node.title = t; } else if (node.hasAttribute("title")) node.removeAttribute("title"); }
+    return node;
+  }
+  _cls(node, c) { if (node.className !== c) node.className = c; }
+  // Make box's children the given spans, reusing them by key: items are [k, className, text | fn (ticking)].
+  _spans(box, items) {
+    const old = new Map([...box.children].map(c => [c.dataset.k, c]));
+    const nodes = items.map(([k, cls, text]) => {
+      let el = old.get(k);
+      if (!el) { el = this._el("span"); el.dataset.k = k; }
+      this._cls(el, cls || "");
+      if (typeof text === "function") this._tickText(el, text); else this._txt(el, text);
+      return el;
+    });
+    this._place(box, nodes);
+  }
+
+  /* ---- scroll anchoring ----
+     HA renders the card inside its own scroll container (Safari has no CSS scroll anchoring at all), so the card keeps
+     the first element on screen where it was: measure it before a change, scroll by its movement after. */
+  _scroller() {
+    let n = this;
+    while (n) {
+      n = n.assignedSlot || n.parentNode || n.host;
+      if (!n || n.nodeType === 9 || n === document.documentElement || n === document.body) return null;
+      if (n.nodeType !== 1) continue;
+      const oy = getComputedStyle(n).overflowY;
+      if ((oy === "auto" || oy === "scroll" || oy === "overlay") && n.scrollHeight > n.clientHeight) return n;
+    }
+    return null;
+  }
+  _anchor() {
+    if (!this.isConnected || Date.now() < this._noAnchorUntil) return null;
+    const sc = this._scroller(), se = document.scrollingElement || document.documentElement;
+    if ((sc ? sc.scrollTop : se.scrollTop) <= 0) return null;  // at the top the page grows downwards, like a browser does
+    const top = sc ? sc.getBoundingClientRect().top : 0, h = sc ? sc.clientHeight : window.innerHeight;
+    const picked = [];
+    for (const el of this.shadowRoot.querySelectorAll("[data-anchor]")) {
+      const r = el.getBoundingClientRect();
+      if (!r.height || r.bottom <= top + 1) continue;
+      if (r.top >= top + h) break;
+      picked.push({el, y: r.top});
+      if (picked.length >= 6) break;
+    }
+    return picked.length ? {sc, se, picked} : null;
+  }
+  // Agent rows on screen before this render changes anything (rows above may shrink during it).
+  _rowsOnScreen() {
+    const out = new Set();
+    if (!this.isConnected) return out;
+    const sc = this._scroller();
+    const top = sc ? sc.getBoundingClientRect().top : 0, h = sc ? sc.clientHeight : window.innerHeight;
+    for (const el of this.shadowRoot.querySelectorAll(".agents > .agent")) {
+      const r = el.getBoundingClientRect();
+      if (r.height > 0 && r.bottom > top && r.top < top + h) out.add(el);
+    }
+    return out;
+  }
+  _reanchor(an) {
+    if (!an) return;
+    for (const p of an.picked) {
+      if (!p.el.isConnected) continue;
+      const r = p.el.getBoundingClientRect();
+      if (!r.height) continue;
+      const d = Math.round(r.top - p.y);
+      if (d) (an.sc || an.se).scrollTop += d;
+      return;
+    }
+  }
 
   _sessions() {
     const out = [];
@@ -343,14 +452,17 @@ class CrewHubCard extends HTMLElement {
 
   /* ---- render ---- */
   _render() {
+    const an = this._anchor();
+    this._onScreenRows = this._rowsOnScreen();
     const focus = this._captureFocus();
     this._tickers = [];
-    this._headSlot.replaceChildren(this._renderHeader());
+    this._renderHeader(this._hTop);
     this._noteSlot.replaceChildren(...(this._hubError ? [this._el("div", "muted", "Crew Hub integration not available")] : []));
     this._syncNew();
     this._syncPlans();
     this._syncSessions();
     this._restoreFocus(focus);
+    this._reanchor(an);
   }
 
   // Fallback for the rare rebuild of a focused control (session reordered, waiting prompt changed, machine changed).
@@ -373,22 +485,27 @@ class CrewHubCard extends HTMLElement {
   }
   _find(attr, val) { return [...this.shadowRoot.querySelectorAll(`[data-${attr}]`)].filter(e => e.dataset[attr] === val); }
 
-  _renderHeader() {
-    const top = this._el("header", "top");
-    const h1 = this._el("h1", null, "Crew ");
-    h1.append(this._el("span", null, "Board"));
+  // Built once (top omitted), then patched on every render.
+  _renderHeader(top) {
+    if (!top) {
+      top = this._el("header", "top");
+      const h1 = this._el("h1", null, "Crew ");
+      h1.append(this._el("span", null, "Board"));
+      top._dot = this._el("i", "dot");
+      top._txt = this._el("span");
+      const fresh = this._el("div", "fresh label");
+      fresh.append(top._dot, top._txt);
+      top.append(this._el("span", "label", "Claude sessions · live"), h1, fresh);
+      return top;
+    }
     let newest = null;
     for (const snap of Object.values(this._snaps)) {
       const u = snap && snap.machine && snap.machine.updatedAt;
       if (ms(u) != null && (newest == null || ms(u) > ms(newest))) newest = u;
     }
-    const fresh = this._el("div", "fresh label");
-    const dot = this._el("i", "dot" + (newest ? " live" : ""));
-    const txt = this._el("span");
-    if (newest) this._tickText(txt, () => "Updated " + dur(newest) + " ago");
-    else txt.textContent = Object.keys(this._snaps).length ? "No update time reported" : "Waiting for snapshots…";
-    fresh.append(dot, txt);
-    top.append(this._el("span", "label", "Claude sessions · live"), h1, fresh);
+    this._cls(top._dot, "dot" + (newest ? " live" : ""));
+    if (newest) this._tickText(top._txt, () => "Updated " + dur(newest) + " ago");
+    else this._txt(top._txt, Object.keys(this._snaps).length ? "No update time reported" : "Waiting for snapshots…");
     return top;
   }
 
@@ -406,53 +523,80 @@ class CrewHubCard extends HTMLElement {
       const tasks = arr(p.tasks).filter(t => t && typeof t === "object");
       const total = Math.max(0, Number(p.total ?? tasks.length) || 0);
       const done = fin ? total : Math.min(Math.max(0, Number(p.done ?? tasks.filter(t => t.status === "done").length) || 0), total);
-      out.push({key: this._key(x), title: str(p.title) || "Untitled plan", phase: fin ? "finished" : str(p.phase || "running"),
+      const title = str(p.title) || "Untitled plan", sk = this._key(x);
+      out.push({key: sk + "|" + title, sk, title, phase: fin ? "finished" : str(p.phase || "running"),
         done, total, fin, where: [x.s.name || x.s.project || "Session", x.mname].map(str).join(" · "), at: at ?? 0,
         tasks: p.source === "tasks"});
     }
-    // Unfinished plans first, newest first; then the recently finished ones.
-    return out.sort((a, b) => (a.fin - b.fin) || (b.at - a.at));
+    // First sight: unfinished plans first, newest first, then the recently finished ones. After that every plan keeps
+    // its place (finishing doesn't move it) and a new plan goes to the end.
+    out.sort((a, b) => (a.fin - b.fin) || (b.at - a.at));
+    const keys = new Set(out.map(p => p.key));
+    for (const k of [...this._planSeq.keys()]) if (!keys.has(k)) this._planSeq.delete(k);
+    for (const p of out) if (!this._planSeq.has(p.key)) this._planSeq.set(p.key, this._n++);
+    return out.sort((a, b) => this._planSeq.get(a.key) - this._planSeq.get(b.key));
   }
 
+  // Strips are kept per plan and patched in place; only which ones are shown (and the +N more button) changes.
   _syncPlans() {
     const plans = this._plans(), more = this._open.has("plans");
-    const sig = JSON.stringify([plans.map(p => [p.key, p.title, p.phase, p.done, p.total, p.where, p.tasks]), more]);
-    if (sig === this._planSig) return;
-    this._planSig = sig;
-    const box = this._el("section", "plans");
-    box.setAttribute("aria-label", "Active plans");
-    box.append(this._el("span", "label", "Active plans"));
-    if (!plans.length) box.append(this._strip(null));
-    (more ? plans : plans.slice(0, MAX_STRIPS)).forEach(p => box.append(this._strip(p)));
-    if (plans.length > MAX_STRIPS) {
-      const b = this._btn(more ? "Show fewer" : `+${plans.length - MAX_STRIPS} more`, "btn-o sm more", "plans|more", null, () => this._toggle("plans"));
-      b.setAttribute("aria-expanded", String(more));
-      box.append(b);
+    const shown = more ? plans : plans.slice(0, MAX_STRIPS);
+    const want = [this._plansLab];
+    if (!plans.length) want.push(this._noPlan);
+    const keep = new Set(plans.map(p => p.key));
+    for (const k of [...this._strips.keys()]) if (!keep.has(k)) this._strips.delete(k);
+    for (const p of shown) {
+      let st = this._strips.get(p.key);
+      if (!st) { st = this._strip(p); this._strips.set(p.key, st); }
+      this._fillStrip(st, p);
+      want.push(st);
     }
-    this._flowSlot.replaceChildren(box);
+    if (plans.length > MAX_STRIPS) {
+      this._txt(this._moreBtn, more ? "Show fewer" : `+${plans.length - MAX_STRIPS} more`);
+      this._moreBtn.setAttribute("aria-expanded", String(more));
+      want.push(this._moreBtn);
+    }
+    this._place(this._plansBox, want);
   }
 
   _strip(p) {
-    const sec = this._el("div", "flow strip" + (p && p.fin ? " finished" : ""));
-    sec.append(this._el("h3", null, p ? p.title : "No plan running"));
-    const bar = this._el("div", "bar"), i = this._el("i");
-    i.style.width = p && p.total ? (100 * p.done / p.total) + "%" : "0";
-    bar.append(i);
+    const sec = this._el("div", "flow strip");
+    sec._h = this._el("h3", null, p ? "" : "No plan running");
+    const bar = this._el("div", "bar");
+    sec._i = this._el("i");
+    sec._i.style.width = "0";
+    bar.append(sec._i);
     const meta = this._el("div", "flowmeta");
-    meta.append(this._el("span", "phase", p ? p.phase : "idle"));
-    if (p && p.total) meta.append(this._el("span", null, `${p.done} of ${p.total} accepted`));
-    if (p) meta.append(this._el("span", "where", p.where));
-    if (p && p.tasks) meta.append(this._el("span", "src", "from tasks"));
-    sec.append(bar, meta);
+    sec._phase = this._el("span", "phase", p ? "" : "idle");
+    sec._cnt = this._el("span", "cnt");
+    sec._where = this._el("span", "where");
+    sec._src = this._el("span", "src", "from tasks");
+    meta.append(sec._phase);
+    if (p) meta.append(sec._cnt, sec._where);
+    sec.append(sec._h, bar, meta);
     if (p) {
+      sec.dataset.anchor = "1";
       sec.tabIndex = 0;
       sec.setAttribute("role", "button");
-      sec.dataset.key = "plan|" + p.key;
-      sec.dataset.plan = p.key;
-      sec.addEventListener("click", () => this._goto(p.key));
-      sec.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._goto(p.key); } });
+      sec.addEventListener("click", () => this._goto(sec._sk));
+      sec.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._goto(sec._sk); } });
     }
     return sec;
+  }
+  _fillStrip(sec, p) {
+    sec._sk = p.sk;
+    sec.dataset.key = "plan|" + p.sk;
+    sec.dataset.plan = p.sk;
+    this._cls(sec, "flow strip" + (p.fin ? " finished" : ""));
+    this._txt(sec._h, p.title, true);
+    const w = p.total ? (100 * p.done / p.total) + "%" : "0";
+    if (sec._i.style.width !== w) sec._i.style.width = w;
+    this._txt(sec._phase, p.phase);
+    this._txt(sec._cnt, p.total ? `${p.done} of ${p.total} accepted` : "");
+    sec._cnt.hidden = !p.total;
+    this._txt(sec._where, p.where, true);
+    // Only on plans derived from the task list (not hidden: absent, so selectors see what the eye sees).
+    if (p.tasks && !sec._src.parentNode) sec._where.after(sec._src); else if (!p.tasks) sec._src.remove();
   }
 
   // Scroll to a session's block; an idle one is opened first (idle section + its row).
@@ -462,6 +606,7 @@ class CrewHubCard extends HTMLElement {
     if (!ACTIVE.has(x.s.status)) { this._idleOpen = true; this._open.add("row|" + key); this._render(); }
     const a = this._arts.get(key);
     if (!a) return;
+    this._noAnchorUntil = Date.now() + 1500;  // a scroll correction would cancel the smooth scroll
     let smooth = true;
     try { smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { /* old browser */ }
     a.el.scrollIntoView({behavior: smooth ? "smooth" : "auto", block: "start"});
@@ -471,20 +616,42 @@ class CrewHubCard extends HTMLElement {
   _syncSessions() {
     const list = this._sessions().sort((a, b) =>
       ((ORDER[a.s.status] ?? 2) - (ORDER[b.s.status] ?? 2)) || cmpDesc(a.s.updatedAt, b.s.updatedAt));
-    const active = [], idle = [], seen = new Set();
+    let active = [], idle = [];
+    const seen = new Set();
     for (const x of list) {
       x.key = this._key(x);
       if (seen.has(x.key)) continue;
       seen.add(x.key);
-      (ACTIVE.has(x.s.status) ? active : idle).push(x);
+      x.grp = ACTIVE.has(x.s.status) ? "a" : "i";
+      (x.grp === "a" ? active : idle).push(x);
     }
+    // Stable order: the sort above only decides the first sight; then each session keeps its place in its section
+    // (working <-> waiting doesn't move it) and one that enters a section goes to its end.
+    for (const k of [...this._seq.keys()]) if (!seen.has(k)) this._seq.delete(k);
+    for (const x of [...active, ...idle]) {
+      const o = this._seq.get(x.key);
+      if (!o || o.grp !== x.grp) this._seq.set(x.key, {grp: x.grp, n: this._n++});
+    }
+    const bySeq = (u, v) => this._seq.get(u.key).n - this._seq.get(v.key).n;
+    active = active.sort(bySeq); idle = idle.sort(bySeq);
     const keepArts = new Set();
     const art = x => {
       let a = this._arts.get(x.key);
       if (!a) {
         a = {el: this._el("article"), top: this._el("div", "slot"), q: this._el("div", "slot"), mid: this._el("div", "slot"),
-          ctl: this._el("div", "ctl"), bottom: this._el("div", "slot"), fin: this._el("div", "fin"), parts: {}, qSig: null, finSig: null};
+          ctl: this._el("div", "ctl"), bottom: this._el("div", "slot"), fin: this._el("div", "fin"), parts: {}, qSig: null, finSig: null,
+          head: this._el("div", "row head"), nm: this._el("h3", "name"), chip: this._el("span"), sum: this._el("div", "summary"),
+          wait: this._el("div", "waiting"), waitTxt: this._el("span"), meta: this._el("div", "meta"),
+          ctxLab: this._el("span", "label"), ctxBar: this._el("div", "ctx"), ctxI: this._el("i"), agents: this._el("div", "agents"),
+          rows: new Map(), aseq: new Map(), an: 0, shown: new Set(), cleared: new Set()};
         a.el.dataset.sess = x.key;
+        a.head.append(a.nm, a.chip);
+        a.top.append(a.head, a.sum);
+        a.wait.append(this._el("b", null, "Waiting: "), a.waitTxt);
+        a.mid.append(a.wait, a.meta);
+        a.ctxBar.append(a.ctxI);
+        a.bottom.append(a.ctxLab, a.ctxBar, a.agents);
+        for (const n of [a.head, a.sum, a.wait, a.meta, a.ctl]) n.dataset.anchor = "1";
         a.el.append(a.top, a.q, a.mid, a.ctl, a.bottom, a.fin);
         this._arts.set(x.key, a);
       }
@@ -533,6 +700,7 @@ class CrewHubCard extends HTMLElement {
     r.btn.dataset.key = "row|" + key;
     r.btn.append(r.nm, r.im, r.is);
     r.btn.addEventListener("click", () => this._toggle("row|" + key));
+    r.head.dataset.anchor = "1";
     r.head.append(r.btn);
     this._rows.set(key, r);
     return r;
@@ -542,16 +710,16 @@ class CrewHubCard extends HTMLElement {
     const {s, mname, offline} = x, key = x.key, fk = "dis|" + key;
     const [cls] = SESS[s.status] || SESS.idle;
     r.cur = x;
-    r.el.className = "irow " + cls;
+    this._cls(r.el, "irow " + cls);
     r.btn.setAttribute("aria-expanded", String(exp));
     const name = str(s.name || s.project || s.id || "Session");
-    r.nm.textContent = name;
-    const im = [this._el("span", null, mname)];
-    if (s.status === "ended") im.push(this._el("span", null, "ended"));
-    if (s.updatedAt) { const sp = this._el("span"); this._tickText(sp, () => "active " + agoMin(s.updatedAt)); im.push(sp); }
-    if (offline) im.push(this._el("span", null, "computer offline"));
-    r.im.replaceChildren(...im);
-    r.is.textContent = str(s.summary);
+    this._txt(r.nm, name);
+    const im = [["m", "", mname]];
+    if (s.status === "ended") im.push(["end", "", "ended"]);
+    if (s.updatedAt) im.push(["act", "act", () => "active " + agoMin(s.updatedAt)]);
+    if (offline) im.push(["off", "", "computer offline"]);
+    this._spans(r.im, im);
+    this._txt(r.is, s.summary, true);
     r.is.hidden = exp || !s.summary;
     const canDismiss = this._live() && !!s.id;
     if (canDismiss && !r.xb) {
@@ -564,60 +732,92 @@ class CrewHubCard extends HTMLElement {
     if (r.xb) { r.xb.setAttribute("aria-label", "Dismiss " + name); r.xb.title = "Dismiss"; }
   }
 
+  // Patched in place: persistent nodes get new text; only parts whose inputs changed are rebuilt.
   _fillSession(a, x, key) {
     const {s, mname, offline, unconfigured} = x;
     const [cls, label] = SESS[s.status] || SESS.idle;
-    a.el.className = "sess " + cls;
-    const r = this._el("div", "row");
-    r.append(this._el("h3", "name", s.name || s.project || s.id || "Session"), this._el("span", "chip c-" + cls, label));
-    a.top.replaceChildren(r);
-    if (s.summary) a.top.append(this._el("div", "summary", s.summary));
+    this._cls(a.el, "sess " + cls);
+    this._txt(a.nm, s.name || s.project || s.id || "Session");
+    this._cls(a.chip, "chip c-" + cls);
+    this._txt(a.chip, label);
+    this._txt(a.sum, s.summary, true);
+    a.sum.hidden = !s.summary;
     this._syncQueue(a, s, key);
-    const box = a.mid;
-    box.replaceChildren();
-    if (s.status === "waiting" && s.waiting) {
-      const w = this._el("div", "waiting");
-      w.append(this._el("b", null, "Waiting: "));
+    const waiting = s.status === "waiting" && s.waiting;
+    a.wait.hidden = !waiting;
+    if (waiting) {
       const parts = [s.waiting.tool, s.waiting.text].map(str).filter(Boolean);
-      w.append(parts.join(" — ") || str(s.waiting.kind) || "input");
-      box.append(w);
+      this._txt(a.waitTxt, parts.join(" — ") || str(s.waiting.kind) || "input");
     }
-    const m = this._el("div", "meta");
-    m.append(this._el("span", null, mname));
-    if (s.localName && str(s.localName) !== str(s.name)) m.append(this._el("span", null, str(s.localName)));
-    if (s.model) m.append(this._el("span", null, str(s.model).replace(/^claude-/, "")));
-    if (typeof s.costUsd === "number" && isFinite(s.costUsd)) m.append(this._el("span", null, "$" + s.costUsd.toFixed(2)));
-    const tk = tokText(s.tokens, true);
-    if (tk) m.append(this._el("span", "tok", tk));
-    if (s.updatedAt) { const sp = this._el("span"); this._tickText(sp, () => "active " + agoMin(s.updatedAt)); m.append(sp); }
-    if (offline) m.append(this._el("span", null, "computer offline"));
-    if (unconfigured) m.append(this._el("span", null, "unconfigured"));
-    box.append(m);
+    const m = [["m", "", mname]];
+    if (s.localName && str(s.localName) !== str(s.name)) m.push(["ln", "", str(s.localName)]);
+    if (s.model) m.push(["mod", "", str(s.model).replace(/^claude-/, "")]);
+    if (typeof s.costUsd === "number" && isFinite(s.costUsd)) m.push(["cost", "cost", "$" + s.costUsd.toFixed(2)]);
+    if (s.updatedAt) m.push(["act", "act", () => "active " + agoMin(s.updatedAt)]);
+    if (offline) m.push(["off", "", "computer offline"]);
+    if (unconfigured) m.push(["unc", "", "unconfigured"]);
+    // Last, so the room kept for it before the first token count is empty space at the end of the row.
+    if (ACTIVE.has(s.status) || tokText(s.tokens, true)) m.push(["tok", "tok hit", tokText(s.tokens, true)]);
+    this._spans(a.meta, m);
     this._syncControls(a, x, key);
-    const bottom = a.bottom;
-    bottom.replaceChildren();
-    const cx = s.ctx;
-    if (cx && Number(cx.max) > 0) {
+    const cx = s.ctx, hasCtx = !!(cx && Number(cx.max) > 0);
+    a.ctxLab.hidden = a.ctxBar.hidden = !hasCtx;
+    if (hasCtx) {
       const pct = Math.max(0, Math.min(100, Math.round(100 * (Number(cx.used) || 0) / Number(cx.max))));
-      const c = this._el("div", "ctx" + (pct > 85 ? " hot" : "")), i = this._el("i");
-      i.style.width = pct + "%"; c.append(i);
-      bottom.append(this._el("span", "label", `Context ${pct}%`), c);
+      this._cls(a.ctxBar, "ctx" + (pct > 85 ? " hot" : ""));
+      if (a.ctxI.style.width !== pct + "%") a.ctxI.style.width = pct + "%";
+      this._txt(a.ctxLab, `Context ${pct}%`);
     }
     const tasks = new Map(arr(s.plan && s.plan.tasks).filter(t => t && t.agentId).map(t => [t.agentId, t]));
     // Agents with no title and no steps (a start with nothing to show yet) aren't rendered.
     const agents = arr(s.agents).filter(g => g && typeof g === "object"
       && (g.title || (tasks.get(g.id) || {}).title || Number(g.steps) > 0));
-    const running = agents.filter(g => g.status === "running")
-      .sort((p, q) => cmpDesc(p.current?.at || p.startedAt, q.current?.at || q.startedAt));
-    if (running.length) {
-      const ag = this._el("div", "agents");
-      running.slice(0, 8).forEach(g => ag.append(this._renderAgent(g, tasks.get(g.id))));
-      bottom.append(ag);
+    // Agent rows keep the order in which they first appeared. A running agent gets a row; when it finishes the row stays
+    // where it is (dimmed) until crew-hubd prunes the agent or Clear finished dismisses it. Agents already finished
+    // when first seen go behind the "N finished" toggle.
+    const aid = g => str(g.id) || "t:" + str(g.title);
+    const ids = new Set(agents.map(aid));
+    // A row whose agent is gone (pruned by crew-hubd) stays as it was while it is on screen, and goes once it has been
+    // scrolled away (above the viewport the scroll correction hides that). Clear finished removes its rows at once.
+    const ghosts = [];
+    for (const k of [...a.aseq.keys()]) {
+      if (ids.has(k)) continue;
+      const r = a.rows.get(k);
+      if (r && a.shown.has(k) && !a.cleared.has(k) && this._onScreenRows.has(r.el)) { ghosts.push(k); continue; }
+      a.aseq.delete(k); a.shown.delete(k); a.cleared.delete(k);
     }
-    this._syncFinished(a, x, key, agents.filter(g => g.status !== "running"), tasks);
+    for (const g of agents) {
+      const k = aid(g);
+      if (!a.aseq.has(k)) a.aseq.set(k, a.an++);
+      if (g.status === "running") a.shown.add(k);
+    }
+    const bySeq = (p, q) => a.aseq.get(aid(p)) - a.aseq.get(aid(q));
+    let main = agents.filter(g => a.shown.has(aid(g))).sort(bySeq);
+    let extra = main.length - MAX_AGENT_ROWS;
+    for (const g of main) {  // too many rows: finished ones leave first, oldest first
+      if (extra <= 0) break;
+      if (g.status !== "running") { a.shown.delete(aid(g)); extra--; }
+    }
+    main = main.filter(g => a.shown.has(aid(g))).slice(0, MAX_AGENT_ROWS);
+    const keep = new Set(ghosts);
+    for (const g of main) {
+      const k = aid(g);
+      let r = a.rows.get(k);
+      if (!r) { r = this._agentNode(); a.rows.set(k, r); }
+      this._fillAgent(r, g, tasks.get(g.id), g.status !== "running");
+      keep.add(k);
+    }
+    const nodes = [...keep].sort((p, q) => a.aseq.get(p) - a.aseq.get(q)).map(k => a.rows.get(k).el);
+    for (const k of [...a.rows.keys()]) if (!keep.has(k)) a.rows.delete(k);
+    this._place(a.agents, nodes);
+    a.agents.hidden = !nodes.length;
+    const shownIds = new Set(main.map(aid));
+    const finished = agents.filter(g => g.status !== "running");
+    this._syncFinished(a, x, key, finished.filter(g => !shownIds.has(aid(g))).sort(bySeq), finished, tasks);
   }
 
-  // Task queue under the summary: running/failed tasks + the next 3 queued; done ones behind an "N done" toggle.
+  // Task queue under the summary: the first MAX_QUEUE tasks that aren't done, in plan order, then "+N more"; done ones
+  // behind an "N done" toggle. A fixed window, so tasks advancing change its text, not its height.
   _syncQueue(a, s, key) {
     const p = s.plan && typeof s.plan === "object" ? s.plan : null;
     const items = p
@@ -634,17 +834,19 @@ class CrewHubCard extends HTMLElement {
       const lab = it.status === "running" ? "working" : it.status;
       const el = this._el("li", it.status === "done" ? "done" : "");
       const span = this._el("span", null, it.title);
+      span.title = it.title;
       if (it.tier) span.append(" ", this._el("span", "tier", it.tier));
       el.append(this._el("b", "c-" + lab, lab), span);
       return el;
     };
-    const queued = items.filter(i => i.status === "queued"), done = items.filter(i => i.status === "done");
-    const now = [...items.filter(i => i.status === "running" || i.status === "failed"), ...queued.slice(0, 3)];
+    const open_ = items.filter(i => i.status !== "done"), done = items.filter(i => i.status === "done");
+    const now = open_.slice(0, MAX_QUEUE);
     const box = this._el("div", "qbox");
+    box.dataset.anchor = "1";
     if (now.length) {
       const ul = this._el("ul", "queue");
       now.forEach(it => ul.append(li(it)));
-      if (queued.length > 3) ul.append(this._el("li", "more", `+${queued.length - 3} more queued`));
+      if (open_.length > MAX_QUEUE) ul.append(this._el("li", "more", `+${open_.length - MAX_QUEUE} more`));
       box.append(ul);
     }
     if (done.length) {
@@ -658,29 +860,34 @@ class CrewHubCard extends HTMLElement {
     a.q.replaceChildren(box);
   }
 
-  // Finished agents (done | failed | stopped) behind an "N finished" toggle, with "Clear finished" (crew_hub/dismiss).
+  // Finished agents without a row of their own (done | failed | stopped) behind an "N finished" toggle, and
+  // "Clear finished" (crew_hub/dismiss) for every finished agent, including the dimmed rows held in place.
   // Rebuilt only when they change, so taps on these buttons aren't lost to the once-a-second re-render.
-  _syncFinished(a, x, key, fin, tasks) {
+  _syncFinished(a, x, key, fin, all, tasks) {
     const fk = key + "|clear", open = this._open.has("fin|" + key), live = this._live() && !!x.s.id;
-    fin.sort((p, q) => cmpDesc(p.endedAt || p.current?.at || p.startedAt, q.endedAt || q.current?.at || q.startedAt));
-    const sig = fin.length ? JSON.stringify([fin, fin.map(g => tasks.get(g.id) || null), open, live]) : "";
+    const ids = all.map(g => str(g.id)).filter(Boolean);
+    const sig = fin.length || (live && ids.length) ? JSON.stringify([fin, fin.map(g => tasks.get(g.id) || null), open, live, ids]) : "";
     if (sig === a.finSig) return;
     a.finSig = sig;
     if (!sig) { a.fin.replaceChildren(); return; }
     const btns = this._el("div", "btns");
-    const t = this._btn(`${fin.length} finished`, "btn-o sm", key + "|fin", null, () => this._toggle("fin|" + key));
-    t.setAttribute("aria-expanded", String(open));
-    btns.append(t);
-    if (live) {
+    btns.dataset.anchor = "1";
+    if (fin.length) {
+      const t = this._btn(`${fin.length} finished`, "btn-o sm", key + "|fin", null, () => this._toggle("fin|" + key));
+      t.setAttribute("aria-expanded", String(open));
+      btns.append(t);
+    }
+    if (live && ids.length) {
       btns.append(this._btn("Clear finished", "btn-o sm", fk, fk, () => {
-        const ids = fin.map(g => str(g.id)).filter(Boolean);
-        if (ids.length) this._dismiss(fk, {machine: x.mid, session: str(x.s.id), agents: ids});
+        if (!ids.length) return;
+        for (const id of ids) a.cleared.add(id);
+        this._dismiss(fk, {machine: x.mid, session: str(x.s.id), agents: ids});
       }));
     }
     const kids = [btns, this._fbNode(fk)];
-    if (open) {
+    if (open && fin.length) {
       const ag = this._el("div", "agents");
-      fin.slice(0, MAX_FINISHED).forEach(g => ag.append(this._renderAgent(g, tasks.get(g.id))));
+      fin.slice(0, MAX_FINISHED).forEach(g => { const r = this._agentNode(); this._fillAgent(r, g, tasks.get(g.id), false, true); ag.append(r.el); });
       kids.push(ag);
     }
     a.fin.replaceChildren(...kids);
@@ -998,47 +1205,60 @@ class CrewHubCard extends HTMLElement {
     this._newSlot.replaceChildren(d);
   }
 
-  _renderAgent(a, task) {
+  // Agent row with a fixed line count: name + chip, meta, one now/summary line, TRAIL_LINES trail lines (empty ones
+  // keep their height), each line cut with an ellipsis. Built once per agent, then patched. `compact` (rows behind the
+  // "N finished" toggle, which never change in place) drops the empty lines.
+  _agentNode() {
+    const r = {el: this._el("div", "agent"), nm: this._el("strong", "name"), chip: this._el("span"), meta: this._el("div", "meta"),
+      now: this._el("div", "now"), dot: this._el("i", "dot live"), line: this._el("span"), trail: this._el("ul", "trail"), tr: []};
+    r.el.dataset.anchor = "1";
+    const rr = this._el("div", "row");
+    rr.append(r.nm, r.chip);
+    r.now.append(r.dot, r.line);
+    for (let i = 0; i < TRAIL_LINES; i++) {
+      const li = this._el("li"), tm = this._el("time"), sp = this._el("span");
+      li.append(tm, sp);
+      r.trail.append(li);
+      r.tr.push({tm, sp});
+    }
+    r.el.append(rr, r.meta, r.now, r.trail);
+    return r;
+  }
+  _fillAgent(r, a, task, held, compact) {
     const status = AGENT.includes(a.status) ? a.status : "done";
     const lab = status === "running" ? "working" : status;
-    const c = this._el("div", "agent " + status);
-    const rr = this._el("div", "row");
-    rr.append(this._el("strong", "name", (task && task.title) || a.title || a.type || ("Agent " + str(a.id).slice(0, 7))), this._el("span", "chip c-" + lab, lab));
-    c.append(rr);
-    const mm = this._el("div", "meta");
+    this._cls(r.el, "agent " + status + (held ? " held" : "") + (compact ? " compact" : ""));
+    this._txt(r.nm, (task && task.title) || a.title || a.type || ("Agent " + str(a.id).slice(0, 7)), true);
+    this._cls(r.chip, "chip c-" + lab);
+    this._txt(r.chip, lab);
+    const m = [];
     const tier = task && task.tier;
-    if (tier) mm.append(this._el("span", null, tier));
+    if (tier) m.push(["tier", "", tier]);
     if (a.startedAt) {
-      const sp = this._el("span", "elapsed");
-      if (status === "running") this._tickText(sp, () => "running " + dur(a.startedAt));
-      else sp.textContent = "took " + dur(a.startedAt, a.endedAt || a.current?.at || a.startedAt);
-      mm.append(sp);
+      if (status === "running") m.push(["el", "elapsed", () => "running " + dur(a.startedAt)]);
+      else m.push(["el", "elapsed", "took " + dur(a.startedAt, a.endedAt || a.current?.at || a.startedAt)]);
     }
     const steps = Number(a.steps) || 0;
-    mm.append(this._el("span", null, steps + " step" + (steps === 1 ? "" : "s")));
-    const tk = tokText(a.tokens, false);
-    if (tk) mm.append(this._el("span", "tok", tk));
-    if (status === "stopped" && a.stopReason) mm.append(this._el("span", null, str(a.stopReason)));
-    c.append(mm);
+    m.push(["st", "steps", steps + " step" + (steps === 1 ? "" : "s")]);
+    if (status === "stopped" && a.stopReason) m.push(["why", "", str(a.stopReason)]);
+    m.push(["tok", "tok", tokText(a.tokens, false)]);  // always there (empty at first): the row doesn't rewrap when it arrives
+    this._spans(r.meta, m);
     const cur = a.current && a.current.text ? a.current : null;
-    if (status === "running" && cur) {
-      const n = this._el("div", "now");
-      n.append(this._el("i", "dot live"), this._el("span", null, cur.text));
-      c.append(n);
-    }
-    const summary = a.summary || (task && task.summary);
-    if (summary && status !== "running") c.append(this._el("div", "summary", summary));
-    const tr = this._el("ul", "trail");
-    arr(a.trail).filter(t => t && t.text && !(cur && status === "running" && t.text === cur.text && t.at === cur.at))
-      .slice(-3).reverse().forEach(t => {
-        const li = this._el("li");
-        const tm = this._el("time", null, hm(t.at));
-        if (t.at) tm.setAttribute("datetime", str(t.at));
-        li.append(tm, this._el("span", null, t.text));
-        tr.append(li);
-      });
-    if (tr.children.length) c.append(tr);
-    return c;
+    const running = status === "running";
+    r.dot.hidden = !(running && cur);
+    const line = running ? (cur ? cur.text : "") : str(a.summary || (task && task.summary));
+    this._cls(r.now, "now" + (running ? "" : " fin") + (line ? "" : " blank"));
+    this._txt(r.line, line, true);
+    const trail = arr(a.trail).filter(t => t && t.text && !(cur && running && t.text === cur.text && t.at === cur.at))
+      .slice(-TRAIL_LINES).reverse();
+    r.tr.forEach((p, i) => {
+      const t = trail[i];
+      this._txt(p.tm, t ? hm(t.at) : "");
+      if (t && t.at) { if (p.tm.getAttribute("datetime") !== str(t.at)) p.tm.setAttribute("datetime", str(t.at)); }
+      else p.tm.removeAttribute("datetime");
+      this._txt(p.sp, t ? t.text : "", true);
+      this._cls(p.tm.parentNode, t ? "" : "blank");
+    });
   }
 }
 

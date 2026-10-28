@@ -1,9 +1,11 @@
 // Browser check of the card's command controls against card/preview-hass.html (fake hass: a snapshot every second,
 // crew_hub/command answered after 600 ms). Run: pw-node card/verify-controls.js  (exit code 0 = all checks passed)
+// 0.5.1: stable order (sessions, strips, agents keep their first-seen places; finished agents stay dimmed in place),
+// fixed agent-row height, ellipsis + title on long text. Layout jumps under load: card/measure-jumps.js.
 // 0.5.0: token chips (session "312k tok · 94% cached", agent "48k tok"), a tasks-sourced plan strip with "from tasks".
 // 0.4.0: active plans stack (strips, tap scrolls, +N more), idle section (collapsed, rows expand), finished agents toggle,
 // Clear finished / Dismiss send crew_hub/dismiss and the items go once the fake connection pushes the filtered machine.
-// Writes card/screenshots/card-v040-390.png and card-v040-1280.png.
+// Writes card/screenshots/card-v051-390.png and card-v051-1280.png.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -58,6 +60,43 @@ const server = http.createServer((req, res) => {
       check(await more.textContent() === "+2 more", "+2 more toggle");
       await more.click();
       check(await strips.count() === 6 && await more.textContent() === "Show fewer", "+N more shows all plans");
+      // 0.5.1: newer plan activity, a finished plan and a new plan don't reorder; the new plan goes to the end
+      await more.click();
+      await page.evaluate(() => {
+        const now = Date.now(), iso = t => new Date(t).toISOString();
+        const sessions = [...Array(7)].map((_, i) => ({id: "s" + i, name: "Session " + i, status: "working", updatedAt: iso(now + i * 1000),
+          plan: {title: "Plan " + i, phase: "build", done: i, total: 6, finished: i === 1, updatedAt: iso(now + i * 60000), tasks: []}}));
+        document.querySelector("crew-hub-card").setSnapshots({m: {machine: {id: "m", name: "m", updatedAt: iso(now)}, sessions}});
+      });
+      check(JSON.stringify(await page.locator("crew-hub-card >> .plans .strip h3").allTextContents())
+        === JSON.stringify(["Plan 0", "Plan 1", "Plan 2", "Plan 3"]), "strips keep their places when plans update or finish");
+      await more.click();
+      check((await page.locator("crew-hub-card >> .plans .strip h3").allTextContents()).join() === "Plan 0,Plan 1,Plan 2,Plan 3,Plan 4,Plan 5,Plan 6",
+        "a new plan goes to the end");
+      check(JSON.stringify(await page.locator("crew-hub-card >> .sessions article.sess .head .name").allTextContents())
+        === JSON.stringify([...Array(7)].map((_, i) => "Session " + i)), "sessions keep their places when newer activity arrives");
+      // Agents: first-seen order; a finished one stays in place (dimmed); rows have one height whatever the text length
+      const agentsAt = async (list) => page.evaluate(list => {
+        const now = Date.now(), iso = t => new Date(t).toISOString();
+        const agents = list.map(([id, status, text, at]) => ({id, title: "Agent " + id, status, startedAt: iso(now - 60000), steps: 3,
+          endedAt: status === "running" ? null : iso(now), current: {text, at: iso(now - at * 1000)}, summary: status === "running" ? null : text,
+          trail: id === "b" ? [{text: "one", at: iso(now - 90000)}] : []}));
+        document.querySelector("crew-hub-card").setSnapshots({m: {machine: {id: "m", name: "m", updatedAt: iso(now)},
+          sessions: [{id: "s", name: "S", status: "working", updatedAt: iso(now), agents}]}});
+      }, list);
+      const long = "A very long note about what the agent is doing right now, ".repeat(4);
+      await agentsAt([["a", "running", "short", 50], ["b", "running", "short", 10], ["c", "running", "short", 30]]);
+      const rows = page.locator("crew-hub-card >> .agents > .agent");
+      const names = () => rows.locator(".name").allTextContents();
+      const heights = () => rows.evaluateAll(es => es.map(e => Math.round(e.getBoundingClientRect().height)));
+      check((await names()).join() === "Agent a,Agent b,Agent c", "agents in first-seen order (not by latest step)");
+      const h0 = await heights();
+      await agentsAt([["a", "running", long, 1], ["b", "done", long, 5], ["c", "running", "x", 2], ["d", "running", "new", 0]]);
+      check((await names()).join() === "Agent a,Agent b,Agent c,Agent d", "newer steps don't reorder; a new agent goes to the end");
+      check(await rows.nth(1).evaluate(e => e.classList.contains("held") && e.classList.contains("done")), "finished agent stays in place, dimmed");
+      const h1 = await heights();
+      check(new Set([...h0, ...h1]).size === 1, `agent rows keep one height (${[...new Set([...h0, ...h1])].join(", ")} px)`);
+      check(await rows.nth(0).locator(".now span").getAttribute("title") === long, "long note cut to one line, full text in title");
       await page.evaluate(() => document.querySelector("crew-hub-card").setSnapshots({}));
       check(await strips.count() === 1 && await strips.first().locator("h3").textContent() === "No plan running", "no plans: one 'No plan running' strip");
       await page.close();
@@ -324,12 +363,12 @@ const server = http.createServer((req, res) => {
     await row("error demo").locator(".iopen").click();
     await page.evaluate(() => window.scrollTo(0, 0));
     await det.locator("summary").click(); // collapse New session for the overview shot (idle section left open)
-    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v050-390.png")});
+    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v051-390.png")});
     await page.setViewportSize({width: 1280, height: 900});
     await idleDet.locator("summary").click(); // collapsed, the default
     await page.waitForTimeout(300);
     check(await overflow() <= 0, "no horizontal overflow at 1280 px");
-    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v050-1280.png")});
+    await page.locator("crew-hub-card").screenshot({path: path.join(DIR, "screenshots", "card-v051-1280.png")});
 
     check(errors.length === 0, "no console errors" + (errors.length ? ": " + errors.join(" | ") : ""));
   } finally {
