@@ -20,6 +20,9 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
 - 0.3.0 (2026-10-26): webhook transport for roaming machines (docs/WEBHOOK.md) via Isaac's proxy, pairing code shown once
   in HA, `crew-hub-pair` run by the human in their own terminal (never via Claude). Interop test tests/ha/test_interop.py.
   NAS stays on MQTT. Mac does NOT need broker ACLs/Tailscale anymore (ACLs still nice-to-have).
+- SCOPE ADDED 2026-10-27: Crew Flow plugin (docs/CREW-FLOW.md): own savvy-flow-style orchestrator with zero-token tracking
+  via built-in task list + agent/task title joins; not built yet, waiting for Isaac's go.
+- 0.4.1 (2026-10-27): waiting = prompt open now (registry-driven); false "needs you" came from Macs' idle_prompt. Macs need the update.
 - Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
 ## People
