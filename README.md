@@ -281,12 +281,40 @@ without an answer, and acks every other refusal (`retained`, `stale` (more than 
 - **start:** `claude --bg --remote-control <name> -n <name> --permission-mode <mode> --model <model> -- <prompt>` in
   the preset folder; the ack carries the background id (and the session id once it registers).
 
+## Windows (plugin 0.6.0)
+
+The machine side runs natively on Windows 10/11 (details and what was verified: `docs/WINDOWS.md`). The Home Assistant
+side is unchanged.
+
+1. **Prerequisites.** Git for Windows (Claude Code on Windows needs it and runs hooks with its Git Bash) and a
+   `python3` 3.9+ that Git Bash finds. Check in Git Bash: `python3 --version`. The Microsoft Store Python provides
+   `python3`; the python.org installer only installs `python` and `py`, so with it add a `python3` (for example the
+   Store one) or the hooks won't run. Nothing to pip install.
+2. **Install:** `claude plugin marketplace add Starkkaman/JamBoard`, then `claude plugin install crew-hub@jamboard`.
+   Start a new session.
+3. **Pair:** run `/crew-hub-setup` in Claude Code. It tells you to run the pairing tool **yourself** in a terminal
+   (PowerShell or Git Bash), with the plugin's absolute path, e.g.
+   `python3 "C:\Users\<you>\.claude\plugins\cache\jamboard\crew-hub\<version>\bin\crew-hub-pair"` (webhook) or with
+   `--mqtt` (a PC on the home LAN can use MQTT). Same pairing codes, same files as on a Mac.
+4. **Check:** `Get-Content ~\.claude\crew-hub\crew-hubd.log -Tail 20` shows `mqtt connected …` or
+   `webhook connected …`, and the PC shows online on the card.
+
+Differences from macOS/Linux:
+
+- **interrupt** isn't available for Windows sessions (it needs a pty around `claude attach`); the card doesn't offer
+  it there. send, answer, stop and start work.
+- A refused **send** can't be detected (the session's named pipe never answers); the ack is `ok` once it's written.
+- No file modes: `~\.claude\crew-hub` is protected by your user profile's permissions instead of 0600/0700.
+- Restart crew-hubd by creating `~\.claude\crew-hub\crew-hubd.stop` (it exits cleanly and the next session start
+  launches a new one; `crew-hub-pair` does this for you). Don't kill it: that skips the offline status and state save.
+
 ## Development
 
 - Card source: `card/crew-hub-card.js`. After editing, run `scripts/sync-card.sh` (copies it into
   `custom_components/crew_hub/www/`; a test fails if the copies differ). Previews: `card/preview.html`,
   `card/preview-hass.html` (fake hass feed + fake command answers). Browser check of the controls:
   `pw-node card/verify-controls.js` (writes `card/screenshots/card-v050-390.png` and `card-v050-1280.png`).
-- Stdlib tests: `python3 -m unittest discover -s tests`.
+- Stdlib tests: `python3 -m unittest discover -s tests` (also on Windows: `python -m unittest discover -s tests`;
+  POSIX-only tests are skipped there).
 - Home Assistant tests: `/home/node/.local/opt/ha-test-venv/bin/python -m pytest tests/ha`
   (venv with `pytest-homeassistant-custom-component`, Python 3.14).

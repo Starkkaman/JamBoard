@@ -8,7 +8,9 @@ in the same directory (a symlinked CLAUDE.md is followed), keeping the old file'
 
 import os
 
-from . import paths
+from . import osdep, paths
+
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
 
 START = "<!-- crew-hub:plan-file -->"
 END = "<!-- /crew-hub:plan-file -->"
@@ -69,10 +71,10 @@ def install():
         os.makedirs(d, 0o700)
     tmp = os.path.join(d, ".CLAUDE.md.crew-hub.%d.tmp" % os.getpid())
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644 if mode is None else mode)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        fd = os.open(tmp, O_BINARY | os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644 if mode is None else mode)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:  # newline="": no \r\n on Windows
             if mode is not None:
-                os.fchmod(f.fileno(), mode)
+                osdep.fchmod(f.fileno(), mode)
             f.write(new)
         os.replace(tmp, target)
     except BaseException:

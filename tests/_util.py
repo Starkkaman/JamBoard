@@ -15,6 +15,92 @@ SAMPLE = os.path.join(ROOT, "docs", "evidence", "hooks-2.1.295-sample.jsonl")
 if LIB not in sys.path:
     sys.path.insert(0, LIB)
 
+WINDOWS = os.name == "nt"
+# Windows Python resolves ~ from USERPROFILE and ignores HOME, so a temp home must set both there, or tests write into
+# the real profile (~/.claude/sessions etc.). POSIX sets HOME only, as always.
+HOME_VARS = ("HOME", "USERPROFILE") if WINDOWS else ("HOME",)
+
+
+def home_env(home, **extra):
+    """os.environ with the home redirected to `home` (for subprocesses), plus `extra`."""
+    env = dict(os.environ, **extra)
+    for k in HOME_VARS:
+        env[k] = home
+    return env
+
+
+def set_home(home):
+    """Redirect the home of this process; returns what restore_home() needs."""
+    old = {k: os.environ.get(k) for k in HOME_VARS}
+    for k in HOME_VARS:
+        os.environ[k] = home
+    return old
+
+
+def restore_home(old):
+    for k, v in old.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def assert_mode(test, path, mode):
+    """POSIX: `path` has exactly `mode`. Windows has no POSIX modes (the profile ACL protects ~/.claude), so there
+    is nothing to check."""
+    if WINDOWS:
+        return
+    import stat
+
+    test.assertEqual(stat.S_IMODE(os.stat(path).st_mode), mode)
+
+
+def stop_daemon(pid, home):
+    """Ask the crew-hubd of `home` to shut down cleanly. POSIX: SIGTERM. Windows: its crew-hubd.stop file (SIGTERM
+    there is TerminateProcess, exit code 1, no clean shutdown)."""
+    if WINDOWS:
+        hub = os.path.join(home, ".claude", "crew-hub")
+        os.makedirs(hub, exist_ok=True)
+        with open(os.path.join(hub, "crew-hubd.stop"), "wb"):
+            pass
+        return
+    import signal
+
+    os.kill(pid, signal.SIGTERM)
+
+
+def kill_daemon(pid, home, timeout=5.0):
+    """tearDown: stop it cleanly, then hard. On Windows a daemon still running keeps files open in the temp home, which
+    then can't be removed."""
+    import signal
+    import time
+
+    try:
+        stop_daemon(pid, home)
+    except Exception:
+        pass
+    end = time.time() + timeout
+    while alive(pid) and time.time() < end:
+        time.sleep(0.05)
+    if alive(pid):
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+
+
+def alive(pid):
+    """Process liveness without os.kill(pid, 0), which is Ctrl+C on Windows."""
+    from crewhub import osdep
+
+    return osdep.pid_alive(pid)
+
+
+def script(path, *args):
+    """argv for one of the plugin's bin/ scripts. POSIX execs it (shebang); Windows has no shebang exec outside Git
+    Bash, so run it with this interpreter."""
+    return ([sys.executable, path] if WINDOWS else [path]) + list(args)
+
 
 def sample_payloads():
     with open(SAMPLE, "r", encoding="utf-8") as f:

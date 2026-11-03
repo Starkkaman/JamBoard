@@ -27,7 +27,9 @@ import socket
 import sys
 import time
 
-from . import VERSION, config, paths
+from . import VERSION, config, osdep, paths
+
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
 
 CODE_PREFIX = "crewhub1:"
 KIND_WEBHOOK = "webhook"
@@ -112,8 +114,7 @@ def parse_code(code):
 def _ensure_dir():
     d = paths.ensure_hub_dir()
     try:
-        if os.stat(d).st_mode & 0o077:
-            os.chmod(d, 0o700)
+        osdep.tighten(d, 0o700)
     except OSError:
         pass
     return d
@@ -173,29 +174,37 @@ def _daemon_pid():
 
 
 def _alive(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return osdep.pid_alive(pid)
 
 
 def _lock_free():
-    """True once no crew-hubd holds the pidfile lock (it keeps an flock for its whole life)."""
-    import fcntl
-
+    """True once no crew-hubd holds the pidfile lock (it keeps one for its whole life)."""
     try:
-        fd = os.open(paths.pid_path(), os.O_RDONLY)
+        fd = os.open(paths.pid_path(), (O_BINARY | os.O_RDWR) if osdep.WINDOWS else os.O_RDONLY)
     except OSError:
         return True
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
+        if not osdep.lock_exclusive(fd):
+            return False
+        osdep.unlock(fd)
     finally:
         os.close(fd)  # closing drops the lock again
+    return True
+
+
+def _request_stop(pid):
+    """Ask crew-hubd to stop. POSIX: SIGTERM. Windows: the crew-hubd.stop file (a clean shutdown: offline status,
+    state save); SIGTERM there is TerminateProcess. Returns False when the process is already gone."""
+    if osdep.WINDOWS:
+        if not osdep.pid_alive(pid):
+            return False
+        fd = os.open(paths.stop_path(), O_BINARY | os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
+        return True
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
     return True
 
 
@@ -204,9 +213,7 @@ def restart_daemon(out):
 
     pid = _daemon_pid()
     if pid:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+        if not _request_stop(pid):
             pid = None
         end = time.time() + STOP_WAIT
         while pid and _alive(pid) and not _lock_free() and time.time() < end:

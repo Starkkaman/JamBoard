@@ -22,7 +22,9 @@ import subprocess
 import threading
 import time
 
-from . import inbox, paths
+from . import inbox, osdep, paths
+
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
 
 ACTIONS = ("send", "answer", "interrupt", "stop", "start")
 WINDOW_MS = 60 * 1000
@@ -209,27 +211,49 @@ def find_claude():
     found = shutil.which("claude")
     if found:
         return found
-    cand = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude")
+    cand = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude.exe" if osdep.WINDOWS else "claude")
     return cand if os.path.isfile(cand) else "claude"
 
 
+def _trust_keys(path):
+    """The spellings ~/.claude.json may use for `path`: exact; on Windows also forward slashes ("C:/Projects/x"),
+    which is how Claude Code writes them there (verified 2.1.317)."""
+    keys = [path]
+    if osdep.WINDOWS:
+        fwd = path.replace("\\", "/")
+        if fwd != path:
+            keys.append(fwd)
+    return keys
+
+
 def is_trusted(path, claude_json=None):
-    """projects[path].hasTrustDialogAccepted in ~/.claude.json (read-only, exact path)."""
+    """projects[path].hasTrustDialogAccepted in ~/.claude.json (read-only, exact path; see _trust_keys)."""
     try:
         with open(claude_json or paths.claude_json_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
         return False
     projects = data.get("projects") if isinstance(data, dict) else None
-    entry = projects.get(path) if isinstance(projects, dict) else None
-    return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
+    if not isinstance(projects, dict):
+        return False
+    for key in _trust_keys(path):
+        entry = projects.get(key)
+        if isinstance(entry, dict):
+            return entry.get("hasTrustDialogAccepted") is True
+    return False
+
+
+def _child_kwargs():
+    """Extra Popen arguments for CLI children. Windows: crew-hubd has no console, so a console child would open a
+    new window; CREATE_NO_WINDOW keeps it hidden (start_new_session is POSIX-only and ignored there)."""
+    return {"creationflags": osdep.CREATE_NO_WINDOW} if osdep.WINDOWS else {}
 
 
 def write_private_atomic(path, data):
     tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = os.open(tmp, O_BINARY | os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        osdep.fchmod(fd, 0o600)
         os.write(fd, data)
         os.fsync(fd)
     finally:
@@ -414,6 +438,8 @@ class Executor(object):
         return entry, bg
 
     def do_interrupt(self, a):
+        if osdep.WINDOWS:
+            raise CommandError("unsupported")  # needs a pty around `claude attach`; not offered in controls either
         _, bg = self._bg_entry(a["session"])
         if not self.pty_escape([self.claude, "attach", bg]):
             raise CommandError("attach_failed")
@@ -423,7 +449,7 @@ class Executor(object):
         _, bg = self._bg_entry(a["session"])
         try:
             r = self.run_proc([self.claude, "stop", bg], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, timeout=STOP_TIMEOUT, start_new_session=True)
+                              stderr=subprocess.PIPE, timeout=STOP_TIMEOUT, start_new_session=True, **_child_kwargs())
         except subprocess.TimeoutExpired:
             raise CommandError("timeout")
         except OSError:
@@ -445,7 +471,7 @@ class Executor(object):
         argv = build_start_argv(self.claude, a)
         try:
             r = self.run_proc(argv, cwd=path, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              timeout=START_TIMEOUT, start_new_session=True)
+                              timeout=START_TIMEOUT, start_new_session=True, **_child_kwargs())
         except subprocess.TimeoutExpired:
             raise CommandError("timeout")
         except OSError:

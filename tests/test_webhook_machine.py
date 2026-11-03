@@ -316,8 +316,8 @@ class DaemonWebhookTest(unittest.TestCase):
         from test_daemon import write_spool
 
         write_spool(self.hub_dir, payloads[:5])
-        env = dict(os.environ, HOME=self.home, **ALLOW)
-        self.proc = subprocess.Popen([_util.DAEMON], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        env = _util.home_env(self.home, **ALLOW)
+        self.proc = subprocess.Popen(_util.script(_util.DAEMON), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertTrue(wait(lambda: self.hub.of_type("snapshot") and self.hub.of_type("poll")))
         self.assertEqual(self.hub.accepted[0]["type"] in ("hello", "poll"), True)
         self.assertEqual(self.hub.of_type("hello")[0]["data"], {"version": VERSION})
@@ -339,7 +339,7 @@ class DaemonWebhookTest(unittest.TestCase):
         self.assertTrue(wait(lambda: len(self.hub.of_type("snapshot")) > n))
         # SIGTERM with a poll held: stops promptly
         t0 = time.time()
-        self.proc.send_signal(signal.SIGTERM)
+        _util.stop_daemon(self.proc.pid, self.home)
         self.assertEqual(self.proc.wait(timeout=15), 0)
         self.assertLess(time.time() - t0, 8)
         self.assertEqual(self.proc.stdout.read() + self.proc.stderr.read(), b"")
@@ -359,16 +359,16 @@ class DaemonWebhookTest(unittest.TestCase):
     def test_unusable_webhook_config_is_file_only(self):
         with open(os.path.join(self.hub_dir, "config.json"), "w") as f:
             json.dump({"machineId": "mac", "transport": "webhook", "webhook": {"url": self.hub.url}}, f)
-        env = dict(os.environ, HOME=self.home)  # no test flag: http is refused
+        env = _util.home_env(self.home)  # no test flag: http is refused
         env.pop(config.TEST_HTTP_ENV, None)
-        self.proc = subprocess.Popen([_util.DAEMON, "--once"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.proc = subprocess.Popen(_util.script(_util.DAEMON, "--once"), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(self.proc.wait(timeout=15), 0)
         with open(os.path.join(self.hub_dir, "crew-hubd.log")) as f:
             log = f.read()
         self.assertIn("transport webhook not usable: config.json webhook.url unusable (must start with https://)", log)
         self.assertIn("file-only", log)
         self.assertEqual(self.hub.requests, [])
-        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.hub_dir, "snapshot.json")).st_mode), 0o600)
+        _util.assert_mode(self, os.path.join(self.hub_dir, "snapshot.json"), 0o600)
 
 
 if __name__ == "__main__":

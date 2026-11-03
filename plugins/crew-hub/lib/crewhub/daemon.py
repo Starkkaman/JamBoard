@@ -7,19 +7,20 @@ crew/<m>/ack. With config "transport": "webhook" (docs/WEBHOOK.md) the snapshot,
 instead (webhook.WebhookLink); the command handler is the same. Never logs secrets, prompts or command arguments.
 """
 
-import fcntl
 import json
 import os
 import signal
 import sys
 import time
 
-from . import VERSION, config, paths
+from . import VERSION, config, osdep, paths
 from .commands import CommandHandler, Executor
 from .mqtt import Client
 from .spool import Spool
 from .state import Model, now_ms
 from .webhook import WebhookLink
+
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
 
 POLL = 0.25
 ENRICH = 3.0
@@ -43,19 +44,17 @@ class Log(object):
                     os.replace(self.path, self.path + ".1")
             except OSError:
                 pass
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            try:
-                line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
-                os.write(fd, line.encode("utf-8", "replace"))
-            finally:
-                os.close(fd)
+            line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
+            # main thread and the command worker both log: one atomic append per line (osdep.append_bytes; the
+            # Windows C runtime's O_APPEND is seek-then-write and lets the two overwrite each other)
+            osdep.append_bytes(self.path, line.encode("utf-8", "replace"))
         except Exception:
             pass
 
 
 def write_atomic(path, data):
     tmp = "%s.%d.tmp" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, O_BINARY | os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, data)
     finally:
@@ -324,6 +323,8 @@ class Daemon(object):
             self.link.start()
         first = True
         while not self.stop:
+            if osdep.WINDOWS and stop_requested():
+                break
             now = time.time()
             try:
                 self.ingest()
@@ -364,12 +365,24 @@ class Daemon(object):
         self.log("crew-hubd stopped")
 
 
-def _lock_pidfile():
-    """Hold an exclusive flock on the pidfile for the daemon's lifetime. Returns the fd, or None if another runs."""
-    fd = os.open(paths.pid_path(), os.O_RDWR | os.O_CREAT, 0o600)
+def stop_requested():
+    """Windows graceful stop: crew-hub-pair (or the person) creates crew-hubd.stop; the daemon removes it and shuts
+    down cleanly (offline status, final snapshot, state save). os.kill(pid, SIGTERM) on Windows is TerminateProcess,
+    which would skip all of that."""
+    p = paths.stop_path()
+    if not os.path.exists(p):
+        return False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.unlink(p)
     except OSError:
+        pass
+    return True
+
+
+def _lock_pidfile():
+    """Hold an exclusive lock on the pidfile for the daemon's lifetime. Returns the fd, or None if another runs."""
+    fd = os.open(paths.pid_path(), O_BINARY | os.O_RDWR | os.O_CREAT, 0o600)
+    if not osdep.lock_exclusive(fd):
         os.close(fd)
         return None
     os.ftruncate(fd, 0)
@@ -394,14 +407,31 @@ def main(argv=None):
     signal.signal(signal.SIGINT, _stop)
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if hasattr(signal, "SIGBREAK"):  # Windows Ctrl+Break
+        signal.signal(signal.SIGBREAK, _stop)
+    if osdep.WINDOWS:
+        try:
+            os.unlink(paths.stop_path())  # a stale request must not stop the new daemon at once
+        except OSError:
+            pass
     try:
         daemon.run(once=once)
     except Exception as e:
         log("fatal: %s: %s" % (type(e).__name__, e))
     finally:
-        try:
-            os.unlink(paths.pid_path())
-        except OSError:
-            pass
-        os.close(fd)
+        if osdep.WINDOWS:
+            # An open file can't be deleted on Windows: release and close first. A daemon that takes the lock in
+            # between keeps its own handle open, so this unlink then fails harmlessly instead of removing its file.
+            osdep.unlock(fd)
+            os.close(fd)
+            try:
+                os.unlink(paths.pid_path())
+            except OSError:
+                pass
+        else:
+            try:
+                os.unlink(paths.pid_path())
+            except OSError:
+                pass
+            os.close(fd)
     return 0

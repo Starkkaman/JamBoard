@@ -12,13 +12,13 @@ import _util
 
 
 def run_hook(home, payload, extra_env=None):
-    env = dict(os.environ, HOME=home)
+    env = _util.home_env(home)
     env.pop("CREW_HUB_NO_DAEMON", None)
     if extra_env:
         env.update(extra_env)
     data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     t0 = time.time()
-    p = subprocess.run([_util.HOOK], input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=10)
+    p = subprocess.run(_util.script(_util.HOOK), input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=10)
     return p, time.time() - t0
 
 
@@ -42,7 +42,7 @@ class HookEndToEndTest(unittest.TestCase):
         pidfile = os.path.join(self.hub, "crew-hubd.pid")
         try:
             with open(pidfile) as f:
-                os.kill(int(f.read().strip()), signal.SIGTERM)
+                _util.kill_daemon(int(f.read().strip()), self.home)
         except Exception:
             pass
         self.tmp.cleanup()
@@ -61,8 +61,8 @@ class HookEndToEndTest(unittest.TestCase):
         self.assertEqual((rec["ev"], rec["desc"], rec["tool"]), ("PreToolUse", "Print hi via echo", "Bash"))
         self.assertNotIn("echo hi", lines[0])
         self.assertIsInstance(rec["pid"], int)
-        self.assertEqual(stat.S_IMODE(os.stat(spool).st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(os.stat(self.hub).st_mode), 0o700)
+        _util.assert_mode(self, spool, 0o600)
+        _util.assert_mode(self, self.hub, 0o700)
         # no daemon for non-SessionStart events
         time.sleep(0.3)
         self.assertFalse(os.path.exists(os.path.join(self.hub, "crew-hubd.pid")))
@@ -78,7 +78,7 @@ class HookEndToEndTest(unittest.TestCase):
         for junk in (b"", b"not json", b"\xff\xfe", b"[1,2]"):
             p, _ = run_hook(self.home, junk)
             self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"", b""))
-        with open(os.path.join(self.hub, "spool.jsonl")) as f:
+        with open(os.path.join(self.hub, "spool.jsonl"), encoding="utf-8") as f:
             self.assertEqual(len(f.read().splitlines()), len(self.payloads) - 1 + 4)
 
     def test_unwritable_home_still_exits_zero_silently(self):
@@ -102,7 +102,7 @@ class HookEndToEndTest(unittest.TestCase):
                    "last_assistant_message": "Edited /home/node/secret/dir/app.py, see https://h.example.com/x?t=1"}
         p, elapsed = run_hook(self.home, payload)
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"", b""))
-        with open(os.path.join(self.hub, "spool.jsonl")) as f:
+        with open(os.path.join(self.hub, "spool.jsonl"), encoding="utf-8") as f:
             rec = json.loads(f.read().splitlines()[-1])
         return rec.get("msg"), elapsed
 
@@ -129,10 +129,11 @@ class HookEndToEndTest(unittest.TestCase):
         self.assertTrue(wait(lambda: os.path.exists(pidfile) and pid_written()))
         with open(pidfile) as f:
             pid = int(f.read().strip())
-        os.kill(pid, 0)
-        # double fork + setsid: a new session (led by the exited middle child), not ours or the hook's
-        self.assertNotEqual(os.getsid(pid), os.getsid(0))
-        self.assertNotEqual(os.getpgid(pid), os.getpgid(0))
+        self.assertTrue(_util.alive(pid))
+        if not _util.WINDOWS:
+            # double fork + setsid: a new session (led by the exited middle child), not ours or the hook's
+            self.assertNotEqual(os.getsid(pid), os.getsid(0))
+            self.assertNotEqual(os.getpgid(pid), os.getpgid(0))
         # a second SessionStart must not start another daemon
         run_hook(self.home, start)
         time.sleep(0.5)
@@ -140,7 +141,7 @@ class HookEndToEndTest(unittest.TestCase):
             self.assertEqual(int(f.read().strip()), pid)
         snap = os.path.join(self.hub, "snapshot.json")
         self.assertTrue(wait(lambda: os.path.exists(snap)))
-        os.kill(pid, signal.SIGTERM)
+        _util.stop_daemon(pid, self.home)
         self.assertTrue(wait(lambda: not os.path.exists(pidfile)))
 
 

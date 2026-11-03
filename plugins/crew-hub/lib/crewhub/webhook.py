@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import os
 import queue
 import socket
 import ssl
@@ -131,6 +132,14 @@ class Http(object):
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            if os.name == "nt":
+                # Winsock: shutdown() doesn't wake a recv() blocked in another thread, and sock.close() is deferred
+                # while http.client's makefile() holds a reference. Detach (the object stops owning the handle, so a
+                # later close can't hit a reused one) and close the handle itself: the blocked read fails at once.
+                try:
+                    socket.close(sock.detach())
+                except (OSError, ValueError):
+                    pass
 
     def post(self, body):
         for attempt in (0, 1):

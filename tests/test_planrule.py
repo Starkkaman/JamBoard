@@ -18,7 +18,7 @@ class PlanRuleTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = self.tmp.name
         self.md = os.path.join(self.home, ".claude", "CLAUDE.md")
-        self.env = mock.patch.dict(os.environ, {"HOME": self.home})
+        self.env = mock.patch.dict(os.environ, {k: self.home for k in _util.HOME_VARS})
         self.env.start()
 
     def tearDown(self):
@@ -55,7 +55,7 @@ class PlanRuleTest(unittest.TestCase):
         self.assertEqual(planrule.install(), "unchanged")
         self.assertEqual(self.text(), first)
         self.assertEqual(first.count(planrule.START), 1)
-        self.assertEqual(stat.S_IMODE(os.stat(self.md).st_mode), 0o600)
+        _util.assert_mode(self, self.md, 0o600)
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.md))), ["CLAUDE.md"])  # no temp files
 
     def test_old_block_replaced_and_duplicates_dropped(self):
@@ -79,6 +79,7 @@ class PlanRuleTest(unittest.TestCase):
             planrule.install()
         self.assertEqual(self.text(), "keep\n%s\nhalf a block\n" % planrule.START)
 
+    @unittest.skipIf(_util.WINDOWS, "symlinks need admin or Developer Mode on Windows")
     def test_symlinked_file_is_followed(self):
         os.makedirs(os.path.dirname(self.md))
         real = os.path.join(self.home, "dotfiles-CLAUDE.md")
@@ -94,10 +95,10 @@ class PlanRuleTest(unittest.TestCase):
         os.makedirs(os.path.dirname(self.md))
         with open(self.md, "w") as f:
             f.write("# mine\n")
-        env = dict(os.environ, HOME=self.home)
+        env = _util.home_env(self.home)
         outs = []
         for _ in range(2):
-            r = subprocess.run([PAIR, "--install-plan-rule"], env=env, stdin=subprocess.DEVNULL,
+            r = subprocess.run(_util.script(PAIR, "--install-plan-rule"), env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
             self.assertEqual(r.returncode, 0, r.stderr)
             outs.append(r.stdout.decode())

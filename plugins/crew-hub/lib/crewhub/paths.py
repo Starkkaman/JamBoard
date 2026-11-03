@@ -23,6 +23,11 @@ def pid_path():
     return os.path.join(hub_dir(), "crew-hubd.pid")
 
 
+def stop_path():
+    """crew-hubd.stop: graceful stop request (Windows, where there is no SIGTERM)."""
+    return os.path.join(hub_dir(), "crew-hubd.stop")
+
+
 def log_path():
     return os.path.join(hub_dir(), "crew-hubd.log")
 
@@ -80,8 +85,9 @@ def ensure_answers_dir():
     except FileExistsError:
         pass
     try:
-        if os.stat(d).st_mode & 0o077:
-            os.chmod(d, 0o700)
+        from . import osdep
+
+        osdep.tighten(d, 0o700)
     except OSError:
         pass
     return d

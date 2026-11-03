@@ -53,17 +53,13 @@ class TempHome(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = self.tmp.name
-        self._old_home = os.environ.get("HOME")
-        os.environ["HOME"] = self.home
+        self._old_home = _util.set_home(self.home)
         self.hub = paths.ensure_hub_dir()
         self.sessions = paths.sessions_dir()
         os.makedirs(self.sessions, exist_ok=True)
 
     def tearDown(self):
-        if self._old_home is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = self._old_home
+        _util.restore_home(self._old_home)
         self.tmp.cleanup()
 
     def write_json(self, path, data, mode=0o600):
@@ -128,7 +124,7 @@ class VerifierTest(unittest.TestCase):
 
 class ValidateTest(unittest.TestCase):
     def setUp(self):
-        self.c = cmds_config({"folders": {"proj": {"path": "/tmp", "label": "Projects"}}})
+        self.c = cmds_config({"folders": {"proj": {"path": abs_path("/tmp"), "label": "Projects"}}})
 
     def bad(self, action, args, code):
         with self.assertRaises(CommandError) as cm:
@@ -208,10 +204,61 @@ class FakeInbox(object):
         self.srv.close()
 
 
+class FakePipeInbox(object):
+    """Windows: a named pipe server like Claude Code's (\\\\.\\pipe\\...): records one client's bytes up to the
+    client's close, never replies."""
+
+    def __init__(self):
+        from multiprocessing.connection import Listener
+
+        self.path = "\\\\.\\pipe\\crewhub-test-" + uuid.uuid4().hex
+        self.listener = Listener(self.path, family="AF_PIPE")  # the first pipe instance exists from here on
+        self.data = []
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        try:
+            conn = self.listener.accept()
+        except OSError:
+            return
+        buf = b""
+        try:
+            while True:
+                buf += conn.recv_bytes()
+        except (EOFError, OSError):
+            pass
+        finally:
+            conn.close()
+        self.data.append(buf)
+
+    def frames(self):
+        return [json.loads(line) for line in self.data[0].decode().splitlines()]
+
+    def close(self):
+        try:
+            self.listener.close()
+        except OSError:
+            pass
+
+
+def abs_path(posix_path):
+    """An absolute path for config folder presets: as given on POSIX; with a drive on Windows ("/srv/x" isn't
+    absolute there since Python 3.13)."""
+    return ("C:" + posix_path) if _util.WINDOWS else posix_path
+
+
 class SendTest(TempHome):
-    def test_send_delivers_auth_and_user_frame(self):
+    def fake_inbox(self, reply=b""):
+        """(endpoint path, server): a Unix socket on POSIX, a named pipe on Windows."""
+        if _util.WINDOWS:
+            srv = FakePipeInbox()
+            return srv.path, srv
         sock = os.path.join(self.home, "s.sock")
-        srv = FakeInbox(sock)
+        return sock, FakeInbox(sock, reply)
+
+    def test_send_delivers_auth_and_user_frame(self):
+        sock, srv = self.fake_inbox()
         try:
             self.registry(sock=sock)
             ex = Executor(cmds_config(), sessions_dir=self.sessions)
@@ -224,9 +271,45 @@ class SendTest(TempHome):
         finally:
             srv.close()
 
+    def test_send_next_priority_over_pipe(self):
+        """Windows: the frame is delivered when the client closes; there is no reply to detect a refusal by."""
+        if not _util.WINDOWS:
+            self.skipTest("Windows named pipe")
+        sock, srv = self.fake_inbox()
+        try:
+            self.registry(sock=sock)
+            ex = Executor(cmds_config(), sessions_dir=self.sessions)
+            self.assertEqual(ex.do_send({"session": SID, "text": "x", "urgent": False}), {})
+            self.assertTrue(wait(lambda: srv.data))
+            self.assertEqual(srv.frames()[1]["priority"], "next")
+        finally:
+            srv.close()
+
+    def test_windows_key_file_spelling(self):
+        """Claude Code on Windows names the key file after the LOWER-CASED pipe path and stores procStartFt."""
+        if not _util.WINDOWS:
+            self.skipTest("Windows key file convention")
+        sock, srv = self.fake_inbox()
+        try:
+            entry = self.registry(sock=sock, key=False)
+            digest = hashlib.sha256(sock.lower().encode()).hexdigest()
+            self.write_json(os.path.join(self.sessions, "%d.%s.key" % (entry["pid"], digest)),
+                            {"peerToken": "tok-" + "b" * 28, "procStartFt": entry["procStart"], "pidDomain": "x"})
+            self.assertTrue(inbox.inbox_ready(self.sessions, entry))
+            ex = Executor(cmds_config(), sessions_dir=self.sessions)
+            self.assertEqual(ex.do_send({"session": SID, "text": "hi", "urgent": True}), {})
+            self.assertTrue(wait(lambda: srv.data))
+            self.assertEqual(srv.frames()[0], {"type": "auth", "token": "tok-" + "b" * 28})
+            # a key from an older process with the same pid is refused
+            self.write_json(os.path.join(self.sessions, "%d.%s.key" % (entry["pid"], digest)),
+                            {"peerToken": "t", "procStartFt": "1"})
+            self.assertFalse(inbox.inbox_ready(self.sessions, entry))
+        finally:
+            srv.close()
+
+    @unittest.skipIf(_util.WINDOWS, "Unix socket inbox (Windows: test_send_next_priority_over_pipe)")
     def test_send_next_priority_and_refusal(self):
-        sock = os.path.join(self.home, "s.sock")
-        srv = FakeInbox(sock, reply=b'{"error":"bad token"}')
+        sock, srv = self.fake_inbox(reply=b'{"error":"bad token"}')
         try:
             self.registry(sock=sock)
             ex = Executor(cmds_config(), sessions_dir=self.sessions)
@@ -273,13 +356,22 @@ class BgActionsTest(TempHome):
         self.assertEqual(ex.do_stop({"session": SID}), {})
         self.assertEqual(calls[0][0], ["/opt/claude", "stop", "ab12cd34"])
         self.assertNotIn("shell", calls[0][1])
+        if _util.WINDOWS:
+            # no console window from the detached daemon; interrupt needs a pty, so it is refused
+            self.assertEqual(calls[0][1].get("creationflags"), 0x08000000)
+            with self.assertRaises(CommandError) as cm:
+                ex.do_interrupt({"session": SID})
+            self.assertEqual(cm.exception.code, "unsupported")
+            self.assertEqual(escapes, [])
+            return
         self.assertEqual(ex.do_interrupt({"session": SID}), {})
         self.assertEqual(escapes, [["/opt/claude", "attach", "ab12cd34"]])
 
     def test_interactive_sessions_refused(self):
         self.registry(kind="interactive")
         ex = Executor(cmds_config(), sessions_dir=self.sessions, run=None, pty_escape=None)
-        for fn in (ex.do_stop, ex.do_interrupt):
+        fns = (ex.do_stop,) if _util.WINDOWS else (ex.do_stop, ex.do_interrupt)  # Windows: interrupt is unsupported
+        for fn in fns:
             with self.assertRaises(CommandError) as cm:
                 fn({"session": SID})
             self.assertEqual(cm.exception.code, "not_bg")
@@ -292,6 +384,7 @@ class BgActionsTest(TempHome):
             ex.do_stop({"session": SID})
         self.assertEqual(cm.exception.code, "stop_failed")
 
+    @unittest.skipIf(_util.WINDOWS, "pty is POSIX-only (Windows doesn't offer interrupt)")
     def test_pty_escape_sends_exactly_one_escape(self):
         out = os.path.join(self.home, "keys.bin")
         script = os.path.join(self.home, "fake-claude")
@@ -315,6 +408,7 @@ class BgActionsTest(TempHome):
         with open(out, "rb") as f:
             self.assertEqual(f.read(), b"\x1b")
 
+    @unittest.skipIf(_util.WINDOWS, "pty is POSIX-only (Windows doesn't offer interrupt)")
     def test_pty_escape_without_output_sends_nothing(self):
         script = os.path.join(self.home, "silent")
         with open(script, "w") as f:
@@ -390,13 +484,13 @@ def collect(p, timeout):
 
 
 def hook_env(home):
-    env = dict(os.environ, HOME=home, CREW_HUB_NO_DAEMON="1")
+    env = _util.home_env(home, CREW_HUB_NO_DAEMON="1")
     return env
 
 
 def spool_records(home):
     try:
-        with open(os.path.join(home, ".claude", "crew-hub", "spool.jsonl")) as f:
+        with open(os.path.join(home, ".claude", "crew-hub", "spool.jsonl"), encoding="utf-8") as f:
             return [json.loads(line) for line in f if line.strip()]
     except FileNotFoundError:
         return []
@@ -436,7 +530,7 @@ class AnswerRoundTripTest(TempHome):
         super().tearDown()
 
     def start_hook(self, payload):
-        self.proc = subprocess.Popen([_util.HOOK], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.proc = subprocess.Popen(_util.script(_util.HOOK), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE, env=hook_env(self.home))
         self.proc.stdin.write(json.dumps(payload).encode())
         self.proc.stdin.close()
@@ -471,7 +565,7 @@ class AnswerRoundTripTest(TempHome):
         ack = self.answer({"session": SID, "requestId": rid, "decision": "deny", "message": "not now"})
         self.assertTrue(ack["ok"], ack)
         afile = paths.answer_path(rid)
-        self.assertEqual(stat.S_IMODE(os.stat(paths.answers_dir()).st_mode), 0o700)
+        _util.assert_mode(self, paths.answers_dir(), 0o700)
         out = self.finish()
         self.assertEqual(json.loads(out), {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {
             "behavior": "deny", "message": "Isaac denied this from Crew Hub: not now"}}})
@@ -538,7 +632,7 @@ class AnswerRoundTripTest(TempHome):
 class HookHoldTest(TempHome):
     def run_hook(self, payload, timeout=15):
         t0 = time.time()
-        p = subprocess.run([_util.HOOK], input=json.dumps(payload).encode(), stdout=subprocess.PIPE,
+        p = subprocess.run(_util.script(_util.HOOK), input=json.dumps(payload).encode(), stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, env=hook_env(self.home), timeout=timeout)
         return p, time.time() - t0
 
@@ -572,10 +666,12 @@ class HookHoldTest(TempHome):
             self.assertLess(elapsed, 2)
             self.assertFalse(spool_records(self.home)[-1]["hold"])
 
+    @unittest.skipIf(_util.WINDOWS, "Windows ends a hook with TerminateProcess: no signal handler runs (the hold "
+                                    "then expires in the model instead)")
     def test_killed_hook_records_unanswered(self):
         self.write_json(paths.config_path(), {"commands": {"enabled": True, "holdSeconds": 30}})
         self.write_json(paths.secrets_path(), {"commandSecret": SECRET})
-        p = subprocess.Popen([_util.HOOK], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        p = subprocess.Popen(_util.script(_util.HOOK), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              env=hook_env(self.home))
         p.stdin.write(json.dumps(PERM).encode())
         p.stdin.close()
@@ -588,7 +684,7 @@ class HookHoldTest(TempHome):
     def test_invalid_answer_file_is_ignored(self):
         self.write_json(paths.config_path(), {"commands": {"enabled": True, "holdSeconds": 2}})
         self.write_json(paths.secrets_path(), {"commandSecret": SECRET})
-        p = subprocess.Popen([_util.HOOK], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        p = subprocess.Popen(_util.script(_util.HOOK), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              env=hook_env(self.home))
         p.stdin.write(json.dumps(PERM).encode())
         p.stdin.close()
@@ -604,15 +700,19 @@ class HookHoldTest(TempHome):
 class SnapshotTest(TempHome):
     def test_machine_commands_and_controls(self):
         c = config.Config({"mqtt": {"host": "h"}, "commands": {
-            "enabled": True, "folders": {"proj": {"path": "/srv/very/private/path", "label": "Projects"}}}},
+            "enabled": True, "folders": {"proj": {"path": abs_path("/srv/very/private/path"), "label": "Projects"}}}},
             {"commandSecret": SECRET})
         pub = c.commands.public()
         self.assertEqual(pub["folders"], [{"key": "proj", "label": "Projects"}])
         self.assertNotIn("/srv/very", json.dumps(pub))
         self.assertIsNone(config.Config({"commands": {"enabled": True}}, {}).commands.public())
-        sock = os.path.join(self.home, "s.sock")
-        srv = socket.socket(socket.AF_UNIX)
-        srv.bind(sock)
+        if _util.WINDOWS:
+            srv = FakePipeInbox()
+            sock = srv.path
+        else:
+            sock = os.path.join(self.home, "s.sock")
+            srv = socket.socket(socket.AF_UNIX)
+            srv.bind(sock)
         try:
             self.registry(kind="bg", job="ab12cd34", sock=sock)
             m = Model()
@@ -620,7 +720,8 @@ class SnapshotTest(TempHome):
             m.enrich(self.sessions)
             s = m.snapshot({"id": "m"}, commands_active=True)["sessions"][0]
             self.assertEqual(s["kind"], "bg")
-            self.assertEqual(s["controls"], ["send", "interrupt", "stop"])
+            # Windows: no interrupt (needs a pty); only what works there is advertised
+            self.assertEqual(s["controls"], ["send", "stop"] if _util.WINDOWS else ["send", "interrupt", "stop"])
             self.assertEqual(m.snapshot({"id": "m"}, commands_active=False)["sessions"][0]["controls"], [])
         finally:
             srv.close()
@@ -672,7 +773,7 @@ class DaemonCommandTest(unittest.TestCase):
             os.makedirs(hub, 0o700)
             with open(os.path.join(hub, "config.json"), "w") as f:
                 json.dump({"machineId": "m1", "mqtt": {"host": "127.0.0.1", "port": broker.port},
-                           "commands": {"enabled": True, "folders": {"p": {"path": "/srv/x", "label": "P"}}}}, f)
+                           "commands": {"enabled": True, "folders": {"p": {"path": abs_path("/srv/x"), "label": "P"}}}}, f)
             with open(os.path.join(hub, "secrets.json"), "w") as f:
                 json.dump({"commandSecret": SECRET}, f)
             good = envelope("send", {"session": SID, "text": "S3NDTEXT"})
@@ -680,7 +781,7 @@ class DaemonCommandTest(unittest.TestCase):
             broker.to_client = [mqtt.build_publish("crew/m1/cmd", good, qos=1, packet_id=7),
                                 mqtt.build_publish("crew/m1/cmd", envelope("stop", {"session": SID}, secret="z" * 32),
                                                    qos=1, packet_id=8)]
-            proc = subprocess.Popen([_util.DAEMON], env=dict(os.environ, HOME=tmp.name),
+            proc = subprocess.Popen(_util.script(_util.DAEMON), env=_util.home_env(tmp.name),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             acks = lambda: [json.loads(p[1]) for p in broker.publishes if p[0] == "crew/m1/ack"]
             self.assertTrue(wait(lambda: acks(), timeout=10))

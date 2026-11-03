@@ -34,7 +34,9 @@ import socket
 import stat
 from urllib.parse import urlsplit
 
-from . import paths
+from . import osdep, paths
+
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
 
 
 DEFAULT_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
@@ -225,9 +227,9 @@ class Config(object):
 def _write_private(path, data):
     """Atomic JSON write with mode 0600 (temp file in the same dir, then rename)."""
     tmp = "%s.%d.tmp" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, O_BINARY | os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        osdep.fchmod(fd, 0o600)
         os.write(fd, (json.dumps(data, indent=2) + "\n").encode("utf-8"))
         os.fsync(fd)
     finally:
@@ -251,14 +253,14 @@ def _read_private(path, name, log):
     except OSError:
         return None
     try:
-        if stat.S_IMODE(st.st_mode) & 0o077:
+        if not osdep.WINDOWS and stat.S_IMODE(st.st_mode) & 0o077:  # Windows: the profile ACL protects it
             os.chmod(path, 0o600)
             if log:
                 log("%s was readable by others; tightened to 0600" % name)
     except Exception:
         pass
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         if log:

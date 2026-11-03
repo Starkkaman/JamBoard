@@ -3,23 +3,28 @@
 Lookup rule (verified): the registry entry must belong to a live process (/proc/<pid>/stat field 22 == procStart), and
 the key file ~/.claude/sessions/<pid>.<sha256(messagingSocketPath)>.key must carry the same procStart. Stale files from
 reused pids exist, so both checks are mandatory. The peer token is read only to authenticate; it is never logged.
+
+Windows (verified with Claude Code 2.1.317, docs/WINDOWS.md): procStart is the process creation FILETIME; the
+messaging endpoint is a named pipe (\\\\.\\pipe\\LOCAL\\cc-msg-<hex>); the key file hashes the LOWER-CASED pipe path
+and carries procStartFt instead of procStart. The session reads the frame when the client closes its end (a pipe has
+no half-close), and closes without a reply either way, so "refused" can't be told apart from success there.
 """
 
 import hashlib
 import json
 import os
-import socket
+
+from . import osdep
 
 KIND_MAP = {"bg": "bg", "daemon-worker": "bg", "print": "print", "interactive": "interactive"}
 FRAME_MAX = 64 * 1024
 
 
 def proc_start(pid):
-    """Field 22 (starttime) of /proc/<pid>/stat as a string, or None (dead, or no /proc)."""
+    """The process start token as Claude Code writes procStart (osdep.proc_start), or None (dead, or no way to
+    read it, e.g. macOS)."""
     try:
-        with open("/proc/%d/stat" % int(pid), "rb") as f:
-            data = f.read().decode("utf-8", "replace")
-        return data[data.rindex(")") + 2 :].split()[19]
+        return osdep.proc_start(int(pid))
     except Exception:
         return None
 
@@ -75,12 +80,23 @@ def find_live(sessions_dir, session_id):
     return None
 
 
+def _key_file(sessions_dir, pid, sock):
+    digest = hashlib.sha256(sock.encode("utf-8")).hexdigest()
+    return os.path.join(sessions_dir, "%d.%s.key" % (pid, digest))
+
+
 def key_path(sessions_dir, entry):
+    """~/.claude/sessions/<pid>.<sha256(socket path)>.key. Windows hashes the lower-cased pipe path, so both
+    spellings are tried there (exact first)."""
     sock = entry.get("messagingSocketPath")
     if not isinstance(sock, str) or not sock:
         return None
-    digest = hashlib.sha256(sock.encode("utf-8")).hexdigest()
-    return os.path.join(sessions_dir, "%d.%s.key" % (entry["pid"], digest))
+    kp = _key_file(sessions_dir, entry["pid"], sock)
+    if osdep.WINDOWS and not os.path.exists(kp):
+        low = _key_file(sessions_dir, entry["pid"], sock.lower())
+        if os.path.exists(low):
+            return low
+    return kp
 
 
 def peer_token(sessions_dir, entry):
@@ -95,17 +111,18 @@ def peer_token(sessions_dir, entry):
         return None
     if not isinstance(k, dict) or not isinstance(k.get("peerToken"), str) or not k["peerToken"]:
         return None
-    if k.get("procStart") is not None and str(k.get("procStart")) != str(entry.get("procStart")):
-        return None
+    for field in ("procStart", "procStartFt"):  # procStartFt: Windows (FILETIME, same value as the registry's)
+        if k.get(field) is not None and str(k.get(field)) != str(entry.get("procStart")):
+            return None
     return k["peerToken"]
 
 
 def inbox_ready(sessions_dir, entry):
-    """Cheap check for the snapshot: live entry, socket file present, key file present and matching."""
+    """Cheap check for the snapshot: live entry, socket file (Windows: named pipe) present, key file matching."""
     if not entry_alive(entry):
         return False
     sock = entry.get("messagingSocketPath")
-    if not isinstance(sock, str) or not os.path.exists(sock):
+    if not isinstance(sock, str) or not osdep.socket_present(sock):
         return False
     return peer_token(sessions_dir, entry) is not None
 
@@ -129,6 +146,11 @@ def send_frame(sessions_dir, entry, frame, timeout=5.0):
     )
     if len(data) > FRAME_MAX:
         raise InboxError("too_long")
+    if osdep.is_pipe_path(sock_path):
+        _send_pipe(sock_path, data)
+        return
+    import socket
+
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         s.settimeout(timeout)
@@ -149,6 +171,31 @@ def send_frame(sessions_dir, entry, frame, timeout=5.0):
             raise InboxError("refused")
     finally:
         s.close()
+
+
+def _send_pipe(path, data):
+    """Windows: open the session's named pipe as a client, write auth + frame, close. Closing is the end-of-stream
+    the session waits for (verified: nothing is delivered until then, and it never replies)."""
+    if not osdep.pipe_exists(path):
+        raise InboxError("no_inbox")
+    try:
+        f = open(path, "r+b", buffering=0)
+    except OSError:
+        raise InboxError("send_failed")  # gone, or every pipe instance busy
+    try:
+        view = memoryview(data)
+        while view:
+            n = f.write(view)
+            if not n:
+                raise InboxError("send_failed")
+            view = view[n:]
+    except OSError:
+        raise InboxError("send_failed")
+    finally:
+        try:
+            f.close()
+        except OSError:
+            pass
 
 
 def user_frame(text, urgent):

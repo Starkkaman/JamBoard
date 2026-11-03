@@ -64,6 +64,9 @@ class PairTest(unittest.TestCase):
 
     def tearDown(self):
         for pid in self.daemon_pids:
+            if _util.WINDOWS:
+                _util.kill_daemon(pid, self.home)  # a running daemon keeps the temp home's files open
+                continue
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:
@@ -72,11 +75,11 @@ class PairTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_pair(self, stdin, *args, allow_http=True):
-        env = dict(os.environ, HOME=self.home)
+        env = _util.home_env(self.home)
         env.pop(config.TEST_HTTP_ENV, None)
         if allow_http:
             env[config.TEST_HTTP_ENV] = "1"
-        r = subprocess.run([PAIR, "--stdin"] + list(args), input=stdin.encode("utf-8"), env=env,
+        r = subprocess.run(_util.script(PAIR, "--stdin") + list(args), input=stdin.encode("utf-8"), env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
         return r.returncode, r.stdout.decode("utf-8"), r.stderr.decode("utf-8")
 
@@ -84,8 +87,12 @@ class PairTest(unittest.TestCase):
         with open(os.path.join(self.hub_dir, name)) as f:
             return json.load(f)
 
-    def mode(self, name=None):
-        return stat.S_IMODE(os.stat(os.path.join(self.hub_dir, name) if name else self.hub_dir).st_mode)
+    def assert_modes(self, dir_mode=None, **files):
+        """POSIX: hub dir and files (config_json=0o600 ...) have exactly these modes. Windows: nothing to check."""
+        if dir_mode is not None:
+            _util.assert_mode(self, self.hub_dir, dir_mode)
+        for key, mode in files.items():
+            _util.assert_mode(self, os.path.join(self.hub_dir, key.replace("_", ".")), mode)
 
     def assert_no_echo(self, text, *secrets):
         for s in secrets:
@@ -108,8 +115,7 @@ class PairTest(unittest.TestCase):
         with open(os.path.join(self.home, ".claude", "CLAUDE.md")) as f:
             self.assertEqual(f.read().count("<!-- crew-hub:plan-file -->"), 1)
         self.assert_no_echo(out + err, code, WID, SECRET, code[9:40])
-        self.assertEqual(self.mode(), 0o700)
-        self.assertEqual((self.mode("config.json"), self.mode("secrets.json")), (0o600, 0o600))
+        self.assert_modes(0o700, config_json=0o600, secrets_json=0o600)
         self.assertEqual(self.read("config.json"), {
             "summaries": False, "contextMax": {"opus": 1000}, "machineName": "Isaac's MacBook",
             "transport": "webhook", "webhook": {"url": self.hub.url}, "machineId": "mac",
@@ -122,13 +128,12 @@ class PairTest(unittest.TestCase):
         self.assertEqual(self.hub.rejected, [])
         self.assertEqual(sorted(os.listdir(self.hub_dir)), ["config.json", "secrets.json"])  # no temp files
         # what crew-hubd will load from it
-        env_old = os.environ.get("HOME")
-        os.environ["HOME"] = self.home
+        env_old = _util.set_home(self.home)
         os.environ[config.TEST_HTTP_ENV] = "1"
         try:
             c = config.load()
         finally:
-            os.environ["HOME"] = env_old
+            _util.restore_home(env_old)
             os.environ.pop(config.TEST_HTTP_ENV, None)
         self.assertEqual((c.webhook["id"], c.webhook["port"], c.commands.active), (WID, self.hub.port, True))
 
@@ -169,16 +174,15 @@ class PairTest(unittest.TestCase):
         self.assert_no_echo(out + err, code, NEW_SECRET, SECRET, MQTT_PW, code[9:40])
         self.assertEqual(self.raw("config.json"), cfg_before)  # MQTT login, machine id, commands: untouched
         self.assertEqual(self.read("secrets.json"), {"mqttPassword": MQTT_PW, "commandSecret": NEW_SECRET, "extra": 1})
-        self.assertEqual((self.mode(), self.mode("secrets.json")), (0o700, 0o600))
+        self.assert_modes(0o700, secrets_json=0o600)
         self.assertEqual(sorted(os.listdir(self.hub_dir)), ["config.json", "secrets.json"])  # no temp files
         self.assertEqual(self.hub.requests, [])  # no network for an MQTT code
         # what crew-hubd will load: same broker login, the new secret signs commands
-        env_old = os.environ.get("HOME")
-        os.environ["HOME"] = self.home
+        env_old = _util.set_home(self.home)
         try:
             c = config.load()
         finally:
-            os.environ["HOME"] = env_old
+            _util.restore_home(env_old)
         self.assertEqual((c.transport, c.machine_id, c.mqtt["password"], c.mqtt["username"]),
                          ("mqtt", "nas", MQTT_PW, "crew-nas"))
         self.assertEqual(c.command_secret, NEW_SECRET)
@@ -241,8 +245,8 @@ class PairTest(unittest.TestCase):
         broker = _util.FakeBroker()
         try:
             self.write_mqtt_setup(port=broker.port)
-            env = dict(os.environ, HOME=self.home)
-            old = subprocess.Popen([_util.DAEMON], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env = _util.home_env(self.home)
+            old = subprocess.Popen(_util.script(_util.DAEMON), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.daemon_pids.append(old.pid)
             self.addCleanup(old.wait, 10)  # reaped even when an assertion fails (tearDown kills it first)
             pidfile = os.path.join(self.hub_dir, "crew-hubd.pid")
@@ -268,7 +272,7 @@ class PairTest(unittest.TestCase):
             # the restarted daemon verifies with the new secret; the old secret's command is dropped (no ack)
             self.assertEqual([a["id"] for a in acks()], [new_id])
             self.assertTrue(len(broker.connects) >= 2)
-            os.kill(new_pid, signal.SIGTERM)
+            _util.stop_daemon(new_pid, self.home)
             self.assertTrue(wait(lambda: not os.path.exists(pidfile), 10))
             self.assert_no_echo(read_text(os.path.join(self.hub_dir, "crew-hubd.log")), NEW_SECRET, SECRET, MQTT_PW)
         finally:
@@ -321,8 +325,8 @@ class PairTest(unittest.TestCase):
 
     def test_restarts_the_daemon(self):
         os.makedirs(self.hub_dir, 0o700)
-        env = dict(os.environ, HOME=self.home)
-        old = subprocess.Popen([_util.DAEMON], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env = _util.home_env(self.home)
+        old = subprocess.Popen(_util.script(_util.DAEMON), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.daemon_pids.append(old.pid)
         pidfile = os.path.join(self.hub_dir, "crew-hubd.pid")
         self.assertTrue(wait(lambda: read_text(pidfile).strip() == str(old.pid)))
@@ -335,7 +339,7 @@ class PairTest(unittest.TestCase):
         self.assertNotEqual(new_pid, old.pid)
         # the new daemon runs in webhook mode: its own hello and a snapshot reach the hub
         self.assertTrue(wait(lambda: len(self.hub.of_type("hello")) >= 2 and self.hub.of_type("snapshot")))
-        os.kill(new_pid, signal.SIGTERM)
+        _util.stop_daemon(new_pid, self.home)
         self.assertTrue(wait(lambda: not os.path.exists(pidfile), 10))
         with open(os.path.join(self.hub_dir, "crew-hubd.log")) as f:
             log = f.read()
@@ -361,7 +365,7 @@ class PairTest(unittest.TestCase):
         self.assertEqual(cfg["mqtt"], {"host": "192.0.2.10", "port": 1883, "username": "crew-mac"})
         self.assertEqual((cfg["machineId"], cfg["summaries"], cfg["commands"]["enabled"]), ("mac", True, True))
         self.assertEqual(self.read("secrets.json"), {"mqttPassword": pw, "commandSecret": cs})
-        self.assertEqual((self.mode("config.json"), self.mode("secrets.json")), (0o600, 0o600))
+        self.assert_modes(config_json=0o600, secrets_json=0o600)
         # again with empty password and secret: both kept
         answers = "\n".join(["192.0.2.10", "", "crew-mac", "", "mac", ""]) + "\n"
         rc, out, err = self.run_pair(answers, "--mqtt", "--no-daemon")

@@ -19,6 +19,10 @@ exposed).
    levels up. The tool is `<plugin root>/bin/crew-hub-pair`. Work out the absolute path.
 2. **Python.** Run `python3 --version`. It needs 3.9 or newer (macOS: the system `/usr/bin/python3` from the Command
    Line Tools is fine; `xcode-select --install` if it's missing). Nothing to pip install.
+   **Windows:** hooks run in Git Bash, so `python3` must work *there* (check with the Bash tool). The Microsoft Store
+   Python provides `python3`; the python.org installer only gives `python`/`py`. If `python3` is missing, the hooks
+   silently do nothing: tell the person to install the Store Python (or add a `python3`), and stop here until it works.
+   Windows differences to mention: no interrupt, a refused send can't be detected, see README "Windows".
 3. **Pick the transport.** Ask which applies:
    - **On the home LAN all the time** (a desktop, a server) → MQTT. The person needs the broker host and port, an
      MQTT user and password, the machine id they added in Crew Hub, and its command secret.
@@ -28,6 +32,8 @@ exposed).
    absolute path from step 1 in quotes:
    - webhook: `"<plugin root>/bin/crew-hub-pair"` (paste the code at the hidden prompt; optional `--name "MacBook"`)
    - MQTT: `"<plugin root>/bin/crew-hub-pair" --mqtt`
+   - Windows (PowerShell has no shebangs): prefix `python3`, with a Windows path, e.g.
+     `python3 "C:\Users\me\.claude\plugins\cache\jamboard\crew-hub\0.6.0\bin\crew-hub-pair"` (add `--mqtt` for MQTT)
 
    It writes `~/.claude/crew-hub/config.json` and `secrets.json` (0600), says "paired as <id> with <host>" (webhook),
    and restarts crew-hubd. Wait until they say it's done.
@@ -36,6 +42,7 @@ exposed).
      `mqtt connected to <host>:<port> as machine <id>`. Failures say `failed (HTTP 401 …)`, `unknown webhook` (make a
      new code and pair again), `TLS certificate not trusted`, or a connection error.
    - `python3 -c 'import json,os; s=json.load(open(os.path.expanduser("~/.claude/crew-hub/snapshot.json"))); print(s["machine"]["id"], len(s["sessions"]), "sessions", "commands" in s["machine"])'`
+     (the same works from Git Bash on Windows)
    - The machine should show online on the Crew Hub card.
 6. **Plan-file rule.** Successful pairing already added it to the user-level `~/.claude/CLAUDE.md` (the tool said
    `plan-file rule added to …` or `… is up to date`). If it didn't, or pairing was done with an older plugin, run it
@@ -48,3 +55,7 @@ exposed).
    `"folders": {"projects": {"path": "/Users/me/projects", "label": "Projects"}}`. The folder must already be trusted
    in Claude Code. You may edit `config.json` (it holds no secrets); then restart crew-hubd:
    `kill "$(cat ~/.claude/crew-hub/crew-hubd.pid)"; sleep 1; nohup "<plugin root>/bin/crew-hubd" >/dev/null 2>&1 &`
+   **Windows:** don't kill it (that is TerminateProcess: no clean shutdown). Create the stop file and let the next
+   session start launch a new one: `touch ~/.claude/crew-hub/crew-hubd.stop` (Git Bash), wait until
+   `~/.claude/crew-hub/crew-hubd.pid` is gone, then start a new Claude Code session. Folder preset paths are Windows
+   paths (`"C:\\Users\\me\\projects"` in JSON).

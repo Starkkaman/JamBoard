@@ -1,0 +1,4 @@
+# Git for Windows defaults to core.autocrlf=true, which would check these out with CRLF. Keep the plugin's
+# launchers and code LF on every OS (shebang lines must not end in \r).
+plugins/** text=auto eol=lf
+plugins/crew-hub/bin/* text eol=lf

@@ -19,6 +19,8 @@ because every record carries its own timestamp and events are idempotent folds.
 import os
 import time
 
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
+
 ROTATE_BYTES = 5 * 1024 * 1024
 ROTATE_GRACE = 10.0
 READ_CHUNK = 1024 * 1024
@@ -33,7 +35,7 @@ class _Tail(object):
     def read_lines(self):
         """Complete lines appended since the last call. A trailing partial line is left for the next call."""
         try:
-            fd = os.open(self.path, os.O_RDONLY)
+            fd = os.open(self.path, O_BINARY | os.O_RDONLY)
         except FileNotFoundError:
             return []
         out = []

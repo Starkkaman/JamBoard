@@ -45,7 +45,7 @@ def _no_internal_keys(testcase, obj, where):
 def write_spool(hub, payloads, t0=None):
     os.makedirs(hub, 0o700, exist_ok=True)
     t0 = t0 or time.time()
-    with open(os.path.join(hub, "spool.jsonl"), "a") as f:
+    with open(os.path.join(hub, "spool.jsonl"), "a", encoding="utf-8", newline="") as f:
         for i, p in enumerate(payloads):
             f.write(json.dumps(redact(p, t0 + i * 0.001, None, None)) + "\n")
 
@@ -71,8 +71,8 @@ class DaemonSmokeTest(unittest.TestCase):
 
     def start(self):
         self._close()
-        env = dict(os.environ, HOME=self.home)
-        self.proc = subprocess.Popen([_util.DAEMON], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        env = _util.home_env(self.home)
+        self.proc = subprocess.Popen(_util.script(_util.DAEMON), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def snapshot(self):
         with open(os.path.join(self.hub, "snapshot.json")) as f:
@@ -89,16 +89,16 @@ class DaemonSmokeTest(unittest.TestCase):
         s = snap["sessions"][0]
         self.assertEqual(s["id"], SID)
         self.assertEqual(s["agents"][0]["title"], "Say hi test")
-        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.hub, "snapshot.json")).st_mode), 0o600)
+        _util.assert_mode(self, os.path.join(self.hub, "snapshot.json"), 0o600)
         # a second daemon exits at once (single instance)
-        env = dict(os.environ, HOME=self.home)
-        second = subprocess.run([_util.DAEMON], env=env, timeout=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        env = _util.home_env(self.home)
+        second = subprocess.run(_util.script(_util.DAEMON), env=env, timeout=10, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(second.returncode, 0)
         self.assertTrue(self.proc.poll() is None)
         # live append is picked up
         write_spool(self.hub, payloads[stop_i + 1:])
         self.assertTrue(wait(lambda: self.snapshot()["sessions"][0]["status"] == "ended"))
-        self.proc.send_signal(signal.SIGTERM)
+        _util.stop_daemon(self.proc.pid, self.home)
         self.assertEqual(self.proc.wait(timeout=10), 0)
         self.assertEqual(self.proc.stdout.read() + self.proc.stderr.read(), b"")
         self.assertFalse(os.path.exists(os.path.join(self.hub, "crew-hubd.pid")))
@@ -115,12 +115,12 @@ class DaemonSmokeTest(unittest.TestCase):
         write_spool(self.hub, payloads[:16])  # through the subagent's Bash PreToolUse
         self.start()
         self.assertTrue(wait(lambda: self.snapshot()["sessions"][0]["agents"][0]["steps"] == 1))
-        self.proc.send_signal(signal.SIGTERM)
+        _util.stop_daemon(self.proc.pid, self.home)
         self.proc.wait(timeout=10)
         self.start()
         time.sleep(1.0)
         self.assertEqual(self.snapshot()["sessions"][0]["agents"][0]["steps"], 1)  # not double-counted
-        self.proc.send_signal(signal.SIGTERM)
+        _util.stop_daemon(self.proc.pid, self.home)
         self.proc.wait(timeout=10)
 
     def test_mqtt_mode_against_fake_broker(self):
@@ -142,8 +142,8 @@ class DaemonSmokeTest(unittest.TestCase):
             self.assertEqual(snap["machine"]["id"], "nas")
             self.assertEqual(snap["sessions"][0]["id"], SID)
             self.assertNotIn("pw-xyz", payload.decode())
-            self.assertEqual(stat.S_IMODE(os.stat(cfg).st_mode), 0o600)  # tightened
-            self.proc.send_signal(signal.SIGTERM)
+            _util.assert_mode(self, cfg, 0o600)  # tightened
+            _util.stop_daemon(self.proc.pid, self.home)
             self.assertEqual(self.proc.wait(timeout=10), 0)
             self.assertEqual(broker.publishes[-1], ("crew/nas/status", b"offline", 1, True))
             with open(os.path.join(self.hub, "crew-hubd.log")) as f:
@@ -179,7 +179,7 @@ class DaemonSmokeTest(unittest.TestCase):
             self.assertTrue(wait(lambda: self.snapshot()["sessions"][0]["ctx"]["used"] == 5))
             self.assertTrue(wait(lambda: any(t == "crew/nas/snapshot" and b'"used":5' in pl
                                              for t, pl, *_ in broker.publishes)))
-            self.proc.send_signal(signal.SIGTERM)
+            _util.stop_daemon(self.proc.pid, self.home)
             self.assertEqual(self.proc.wait(timeout=10), 0)
             with open(os.path.join(self.hub, "state.json")) as f:
                 self.assertIn("_tp", f.read())  # the model really had internal fields
@@ -206,7 +206,7 @@ class DaemonSmokeTest(unittest.TestCase):
         self.assertEqual((s["id"], s["status"], s["plan"]["phase"]), ("nohooks-sess", "idle", "probe"))
         os.unlink(plan)
         self.assertTrue(wait(lambda: self.snapshot()["sessions"] == []))
-        self.proc.send_signal(signal.SIGTERM)
+        _util.stop_daemon(self.proc.pid, self.home)
         self.assertEqual(self.proc.wait(timeout=10), 0)
 
 
@@ -224,13 +224,13 @@ class DaemonSmokeTest(unittest.TestCase):
             self.start()
             self.assertTrue(wait(lambda: any(t == "crew/nas/snapshot" for t, *_ in broker.publishes)))
             self.assertIn(pw.encode(), broker.connects[0])  # the login really used it
-            self.proc.send_signal(signal.SIGTERM)
+            _util.stop_daemon(self.proc.pid, self.home)
             self.assertEqual(self.proc.wait(timeout=10), 0)
             # migrated: secrets.json 0600 has it, config.json (0600) keeps everything else and no password
-            self.assertEqual(stat.S_IMODE(os.stat(secrets).st_mode), 0o600)
+            _util.assert_mode(self, secrets, 0o600)
             with open(secrets) as f:
                 self.assertEqual(json.load(f), {"mqttPassword": pw})
-            self.assertEqual(stat.S_IMODE(os.stat(cfg).st_mode), 0o600)
+            _util.assert_mode(self, cfg, 0o600)
             with open(cfg) as f:
                 c = json.load(f)
             self.assertEqual(c, {"machineId": "nas", "summaries": True,
@@ -239,7 +239,7 @@ class DaemonSmokeTest(unittest.TestCase):
             self.start()
             self.assertTrue(wait(lambda: len(broker.connects) >= 2))
             self.assertIn(pw.encode(), broker.connects[1])
-            self.proc.send_signal(signal.SIGTERM)
+            _util.stop_daemon(self.proc.pid, self.home)
             self.assertEqual(self.proc.wait(timeout=10), 0)
             with open(os.path.join(self.hub, "crew-hubd.log")) as f:
                 log = f.read()
@@ -255,8 +255,7 @@ class DaemonSmokeTest(unittest.TestCase):
 class ConfigSecretsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.old_home = os.environ.get("HOME")
-        os.environ["HOME"] = self.tmp.name
+        self.old_home = _util.set_home(self.tmp.name)
         self.hub = os.path.join(self.tmp.name, ".claude", "crew-hub")
         os.makedirs(self.hub, 0o700)
         self.cfg = os.path.join(self.hub, "config.json")
@@ -264,10 +263,7 @@ class ConfigSecretsTest(unittest.TestCase):
         self.logs = []
 
     def tearDown(self):
-        if self.old_home is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = self.old_home
+        _util.restore_home(self.old_home)
         self.tmp.cleanup()
 
     def write(self, path, data, mode=0o600):
@@ -284,7 +280,7 @@ class ConfigSecretsTest(unittest.TestCase):
         self.write(self.secrets, {"mqttPassword": "s3cret", "commandSecret": "cmd-key"}, 0o644)
         c = self.load()
         self.assertEqual((c.mqtt["password"], c.command_secret), ("s3cret", "cmd-key"))
-        self.assertEqual(stat.S_IMODE(os.stat(self.secrets).st_mode), 0o600)  # tightened
+        _util.assert_mode(self, self.secrets, 0o600)  # tightened
         self.assertNotIn("s3cret", "".join(self.logs))
 
     def test_existing_secrets_win_and_no_migration(self):
@@ -320,7 +316,7 @@ class ConfigSecretsTest(unittest.TestCase):
         with open(self.cfg) as f:
             self.assertEqual(json.load(f), {"machineId": "m", "mqtt": {"host": "h", "port": 1}})
         for p in (self.cfg, self.secrets):
-            self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+            _util.assert_mode(self, p, 0o600)
         self.assertEqual([l for l in self.logs if "migrated" in l], ["migrated MQTT password to secrets.json"])
         self.assertNotIn("legacy-pw", "".join(self.logs))
         self.assertEqual(sorted(os.listdir(self.hub)), ["config.json", "secrets.json"])  # no temp files left

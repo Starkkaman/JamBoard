@@ -48,7 +48,7 @@ import os
 import re
 import time
 
-from . import inbox
+from . import inbox, osdep
 
 MAX_AGENTS = 12
 MAX_FINISHED = 6
@@ -488,21 +488,14 @@ def find_registry(sessions_dir, sid):
 
 
 def pid_alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except Exception:
-        return True
+    """osdep.pid_alive (never os.kill(pid, 0) on Windows: that is Ctrl+C there)."""
+    return osdep.pid_alive(pid)
 
 
 def _basename(path):
     if not isinstance(path, str) or not path.strip():
         return None
-    b = os.path.basename(path.rstrip("/"))
+    b = os.path.basename(path.rstrip("/\\" if osdep.WINDOWS else "/"))
     return b[:200] or None
 
 
@@ -574,10 +567,10 @@ def display_name(s):
 
 
 def _proc_gone(pid, proc_start):
-    """True when the process (pid, procStart) no longer runs; without /proc only the pid is checked."""
+    """True when the process (pid, procStart) no longer runs; without a start token (macOS) only the pid is checked."""
     if not isinstance(pid, int) or pid <= 0:
         return True
-    if os.path.isdir("/proc/self"):
+    if osdep.can_check_start():
         return not inbox.entry_alive({"pid": pid, "procStart": proc_start})
     return not pid_alive(pid)
 
@@ -649,10 +642,9 @@ def _wait_kind(waiting_for):
 
 
 def _confirmed_claude_pid(pid):
-    """True only when /proc shows `pid` is a claude process (hook ppid may be a short-lived shell)."""
+    """True only when the OS shows `pid` is a claude process (hook ppid may be a short-lived shell)."""
     try:
-        with open("/proc/%d/cmdline" % pid, "rb") as f:
-            return b"claude" in f.read()
+        return osdep.is_claude_pid(pid)
     except Exception:
         return False
 
@@ -1456,7 +1448,8 @@ class Model(object):
         if isinstance(w, dict) and w.get("requestId") and w.get("hubCanAnswer") is True:
             out.append("answer")
         if s.get("kind") == "bg" and s.get("_pid"):
-            out += ["interrupt", "stop"]
+            # interrupt needs a pty around `claude attach` (POSIX only); stop is a plain `claude stop` everywhere
+            out += ["stop"] if osdep.WINDOWS else ["interrupt", "stop"]
         return out
 
     @classmethod

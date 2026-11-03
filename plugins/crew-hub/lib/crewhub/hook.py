@@ -16,55 +16,28 @@ import os
 import sys
 import time
 
-from . import paths
+from . import osdep, paths
 from .redact import redact
+
+O_BINARY = getattr(os, "O_BINARY", 0)  # Windows: no CRT text-mode translation (CRLF, Ctrl+Z)
 
 POLL_ANSWER = 0.25
 ANSWER_MAX_BYTES = 64 * 1024
 DENY_PREFIX = "Isaac denied this from Crew Hub"
 QUESTION_TOOL = "AskUserQuestion"
 
-SHELLS = ("sh", "bash", "dash", "zsh", "ksh", "fish")
-
-
-def _proc_stat(pid):
-    """(comm, ppid) from /proc/<pid>/stat, or None where /proc is missing (macOS)."""
-    try:
-        with open("/proc/%d/stat" % pid, "rb") as f:
-            data = f.read().decode("utf-8", "replace")
-    except Exception:
-        return None
-    lp, rp = data.find("("), data.rfind(")")
-    if lp < 0 or rp < 0:
-        return None
-    comm = data[lp + 1 : rp]
-    rest = data[rp + 2 :].split()
-    try:
-        return comm, int(rest[1])
-    except Exception:
-        return None
-
 
 def claude_pid():
-    """The claude process that ran this hook: our parent, skipping a `sh -c` wrapper if the CLI used one."""
-    pid = os.getppid()
-    for _ in range(3):
-        st = _proc_stat(pid)
-        if not st or st[0] not in SHELLS or st[1] <= 1:
-            break
-        pid = st[1]
-    return pid
+    """The claude process that ran this hook: our parent, skipping a `sh -c` wrapper if the CLI used one (Windows:
+    the Git Bash processes between claude.exe and us). See osdep.claude_pid."""
+    return osdep.claude_pid(os.getppid())
 
 
 def append_spool(rec):
-    """One os.write on an O_APPEND fd: concurrent hooks can't interleave inside a line."""
+    """One append that concurrent hooks can't interleave inside a line (osdep.append_bytes)."""
     paths.ensure_hub_dir()
     line = (json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-    fd = os.open(paths.spool_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    try:
-        os.write(fd, line)
-    finally:
-        os.close(fd)
+    osdep.append_bytes(paths.spool_path(), line)
 
 
 def daemon_alive():
@@ -75,51 +48,22 @@ def daemon_alive():
         return False
     if pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    if not osdep.pid_alive(pid, on_error=False):
         return False
-    except PermissionError:
-        return True
-    except Exception:
-        return False
-    # Guard against pid reuse where /proc exists.
+    # Guard against pid reuse where the OS lets us check what the process is.
     try:
-        with open("/proc/%d/cmdline" % pid, "rb") as f:
-            return b"crew-hubd" in f.read()
-    except FileNotFoundError:
-        return not os.path.isdir("/proc/self")
+        return osdep.is_daemon_pid(pid)
     except Exception:
         return True
 
 
 def spawn_daemon():
-    """Double fork + setsid, stdio to /dev/null; the parent only reaps the short-lived first child."""
+    """Start crew-hubd detached (POSIX: double fork + setsid; Windows: a detached process). Never waits for it."""
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
     daemon = os.path.join(here, "bin", "crew-hubd")
     if not os.path.isfile(daemon):
         return
-    pid = os.fork()
-    if pid:
-        try:
-            os.waitpid(pid, 0)
-        except Exception:
-            pass
-        return
-    try:
-        os.setsid()
-        if os.fork():
-            os._exit(0)
-        devnull = os.open(os.devnull, os.O_RDWR)
-        for fd in (0, 1, 2):
-            os.dup2(devnull, fd)
-        if devnull > 2:
-            os.close(devnull)
-        os.chdir("/")
-        os.execv(sys.executable, [sys.executable, daemon])
-    except Exception:
-        pass
-    os._exit(0)
+    osdep.spawn_detached([sys.executable, daemon])
 
 
 SUMMARY_EVENTS = ("Stop", "SubagentStop")
@@ -174,7 +118,7 @@ def commands_hold():
 def read_answer(path, request_id):
     """The answer file for `request_id` as a dict, or None (missing, still being written, or invalid: then deleted)."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(path, O_BINARY | os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None
     try:
