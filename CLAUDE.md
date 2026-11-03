@@ -24,6 +24,8 @@ Claude Code plugin. Brief: PROMPT.md. Design + verified/assumed table: docs/DESI
   via built-in task list + agent/task title joins; e2e verified (~$0.02). Installed on the NAS 2026-10-27 (user scope); main CLAUDE.md plan-file rule shortened (backup in scratchpad).
 - 0.4.1 (2026-10-27): waiting = prompt open now (registry-driven); false "needs you" came from Macs' idle_prompt. Macs need the update.
 - 0.5.1 (2026-10-27): card layout jumps fixed (stable first-seen order, fixed-line agent rows/strips, finished agents held in place, scroll compensation incl. Safari/HA scroller); measured with card/measure-jumps.js (visible movement 0 px vs up to 4.8k px in 0.5.0). Not yet checked inside real HA; needs push + HACS update.
+- 0.6.0 (2026-11-03): native Windows machine side (lib/crewhub/osdep.py, docs/WINDOWS.md), built by the Serenity (Windows) session on
+  branch windows-support, reviewed here (Linux py3.11 + py3.9 OK, POSIX paths unchanged) and fast-forwarded to main; live on the NAS.
 - Playwright for screenshots: `pw-node script.js` (~/.local/opt/playwright + chromium-libs, userland).
 
 ## People
