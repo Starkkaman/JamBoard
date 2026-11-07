@@ -120,6 +120,7 @@ the session is idle/ended ("inactive"); a step revives restarted/inactive ones, 
 
 The card renders exactly the Crew Board v4 layout from this: the plan strip comes from `plan` (or `tasks` when there's no plan),
 session blocks from `sessions`, and agent cards from `agents`.
+Since 0.6.0 the card uses Callsheet's Jam look instead (source: `design/callsheet-harmony/`, spec.md + mockup.html).
 
 ### Verified vs. assumed
 

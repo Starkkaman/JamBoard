@@ -34,6 +34,7 @@ from . import commands, dismissed, secret_store, services, websocket
 from .const import (
     CARD_FILENAME,
     CARD_URL,
+    FONTS_URL,
     CONF_MACHINE_ID,
     CONF_MACHINE_NAME,
     CONF_MACHINE_TRANSPORT,
@@ -58,6 +59,7 @@ LOVELACE_DOMAIN = "lovelace"  # hass.data key and component name; not imported s
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 CARD_PATH = Path(__file__).parent / "www" / CARD_FILENAME
+FONTS_PATH = Path(__file__).parent / "www" / "fonts"
 
 CrewHubConfigEntry = ConfigEntry[CrewStore]
 
@@ -241,7 +243,7 @@ async def _async_remove_resource(hass: HomeAssistant) -> None:
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
-    """Serve the card at /crew_hub/crew-hub-card.js and make the frontend load it.
+    """Serve the card at /crew_hub/crew-hub-card.js (its fonts under /crew_hub/fonts/) and make the frontend load it.
 
     Storage-mode Lovelace: a managed Lovelace resource (survives in long-lived app shells such as the Companion app,
     which never re-read extra_js_url). Otherwise (YAML mode, no lovelace, or an error): add_extra_js_url. Never both,
@@ -250,7 +252,9 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_FRONTEND) or "http" not in hass.config.components or hass.http is None:
         return
     digest = await hass.async_add_executor_job(_file_hash, CARD_PATH)
-    await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(CARD_PATH), True)])
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARD_URL, str(CARD_PATH), True), StaticPathConfig(FONTS_URL, str(FONTS_PATH), True)]
+    )
     url = f"{CARD_URL}?v={VERSION}-{digest}"
     managed = False
     if LOVELACE_DOMAIN in hass.config.components:

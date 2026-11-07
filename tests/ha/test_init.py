@@ -3,6 +3,7 @@
 import hashlib
 import json
 import pathlib
+import re
 from unittest.mock import patch
 
 import pytest
@@ -14,7 +15,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.crew_hub.const import CARD_URL, DATA_SECRETS, DATA_STORE, DOMAIN, VERSION
+from custom_components.crew_hub.const import CARD_URL, DATA_SECRETS, DATA_STORE, DOMAIN, FONTS_URL, VERSION
 
 SECRET = "s3cret-s3cret-s3cret"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -226,6 +227,24 @@ async def test_card_served_and_identical(hass: HomeAssistant, mqtt_mock, hass_cl
     assert resp.status == 200
     body = await resp.read()
     assert body == (ROOT / "card" / "crew-hub-card.js").read_bytes()
+
+
+@pytest.mark.parametrize(("name", "ctype"), [("jost.ttf", "font/ttf"), ("ibm-plex-mono-400.woff2", "font/woff2")])
+async def test_card_fonts_served(hass: HomeAssistant, mqtt_mock, hass_client, name, ctype) -> None:
+    """The card's two fonts are served next to it (offline: no Google Fonts)."""
+    assert await async_setup_component(hass, "http", {})
+    await _setup(hass)
+    client = await hass_client()
+    resp = await client.get(f"{FONTS_URL}/{name}")
+    assert resp.status == 200
+    assert resp.headers["Content-Type"].split(";")[0] == ctype
+    assert await resp.read() == (ROOT / "custom_components" / "crew_hub" / "www" / "fonts" / name).read_bytes()
+
+
+def test_card_has_no_outside_urls() -> None:
+    """The card loads nothing from the internet: no http(s) URL anywhere in its source."""
+    src = (ROOT / "custom_components" / "crew_hub" / "www" / "crew-hub-card.js").read_text()
+    assert not re.findall(r"https?://", src, re.I)
 
 
 # ---- Lovelace resource for the card ----

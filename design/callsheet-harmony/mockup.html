@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crew Hub in Callsheet's Jam look (mockup)</title>
+<!-- Design mockup, not the card. Offline: fonts load from ./fonts, data is inlined, no outside requests.
+     The token block inside the card style is copied verbatim from Callsheet d27188c app/static/app.css (see the comment there).
+     URL options: ?mode=auto|light|dark  &theme=light|dark (HA theme)  &open=idle,new,help,trail,more  &shot=1 (hide this bar) -->
+<style data-crew-hub-fonts>
+/* Callsheet d27188c app.css lines 9 and 27, verbatim. The real card injects this once into document.head
+   (Chrome ignores @font-face inside a shadow root) with URLs resolved against /crew_hub/crew-hub-card.js. */
+@font-face{font-family:"Jost";src:url(fonts/jost.ttf) format("truetype");font-weight:100 900;font-display:swap}
+@font-face{font-family:"IBM Plex Mono";src:url(fonts/ibm-plex-mono-400.woff2) format("woff2");font-weight:400;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;font-display:swap}
+</style>
+<style>
+html,body{margin:0;padding:0}
+.harness{font:13px/1.3 system-ui,sans-serif;color-scheme:light dark;background:Canvas;color:CanvasText;display:flex;flex-wrap:wrap;
+  gap:6px 12px;align-items:center;padding:8px 16px;border-bottom:1px solid GrayText}
+.harness button{font:inherit;padding:4px 8px}
+.harness [aria-pressed=true]{font-weight:700;text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="harness" id="harness"></div>
+<crew-hub-card id="card" data-fill></crew-hub-card>
+
+<template id="crew-hub-css"><style>
+/* ===== TOKENS. Verbatim from Callsheet d27188c app/static/app.css lines 593-668 (Jam), 2022-2023 (motion scale),
+   2037 (reduced motion), 2608-2610 (panel base). Only three mechanical rewrites for the shadow root:
+   ":root[data-theme=dark]" -> ":host([data-theme=dark])", ":root:not([data-theme=light])" -> ":host(:not([data-theme=light]))",
+   "@media (max-width:700px)" -> "@container crew (max-width:700px)". ===== */
+/* ================= 0.11.0: JAM (the default; jam-design HANDOFF.md "calm instruments", mockups/pass6/callsheet.html) =================
+   Day and Night are pass 6's :root values: ground --bg, panel --surface, press --surface-2, hair --rule, ink, dim --muted,
+   orange --accent (the one thing to do now). Text-bearing reds use the deeper alert ink (--alert); the red alert key is
+   --alert-key with --on-alert-key. Extra tokens for the panel structure: --ink2 --inset --bubble --kline --walnut
+   --alert-key --on-alert-key --warn --warn-ink --warn-line. Area colours are calm marks (blue, teal, violet, walnut), never
+   orange or a state colour. Structure: data-base=panel (the end of this file). */
+.app[data-look=jam]{
+  color-scheme:light;
+  --font-display:"Jost","Helvetica Neue",Arial,sans-serif;
+  --font-body:"Jost","Helvetica Neue",Arial,sans-serif;
+  --display-case:none;--display-weight:500;--display-lh:1.12;--display-track:-.01em;
+  --label-case:uppercase;--label-track:.14em;--label-weight:400;
+  --radius:10px;--tag-radius:999px;--chip-radius:10px;--phone-radius:0px;
+  --rule-w:1px;--rule-mid:1px;--rule-heavy:1px;--frame-w:1px;--gap-tight:8px;
+  --base-size:16px;--lh:1.45;--focus-w:2px;
+  --cut:none;--cut-bar:none;--cut-torn:none;
+  --fs-xs:13px;--fs-sm:14px;--fs-md:15px;--fs-lg:17px;--fs-time:17px;
+  --fs-h3:19px;--fs-h2:26px;--fs-h1:40px;--fs-stat:30px;--fs-hero:30px;--bezel-w:1px;
+  --font-label:"IBM Plex Mono",ui-monospace,monospace;--font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --font-stat:"IBM Plex Mono",ui-monospace,monospace;--stat-weight:400;--btn-radius:10px;--ease:cubic-bezier(.16,1,.3,1);
+  /* colour: Day */
+  --bg:#ece7dd;--surface:#f7f4ee;--surface-2:#e8e2d5;--text:#19202e;--muted:#5b606d;--rule:#e0d9cb;
+  --accent:#ec7c22;--on-accent:#1a1206;--alert:#b3261b;--ok:#3f8a1f;
+  --area-1:#4a6396;--on-area-1:#f7f4ee;--area-2:#2c6d7d;--on-area-2:#f7f4ee;
+  --area-3:#6f52a3;--on-area-3:#f7f4ee;--area-4:#6b4428;--on-area-4:#f7f4ee;
+  --sel:#19202e;--on-sel:#f7f4ee;
+  --masthead:#ece7dd;--on-masthead:#19202e;--eyebrow:#5b606d;
+  --box:#f7f4ee;--on-box:#19202e;--callbox:#f7f4ee;--on-callbox:#19202e;
+  --panel:#f7f4ee;--on-panel:#19202e;--panel-head:transparent;--on-panel-head:#19202e;--panel-mark:#6b4428;
+  --track:#e0d9cb;--fill:#19202e;--field:#efeae0;--field-line:#8a8477;
+  --phone:#ece7dd;--bezel:#e0d9cb;
+  --tabbar:#ece7dd;--on-tabbar:#5b606d;--tab-on:#ece7dd;--on-tab-on:#19202e;
+  --focus:#19202e;
+  --ink2:#343b4a;--inset:#efeae0;--bubble:#e6dfd0;--kline:#8a8477;--walnut:#6b4428;
+  --alert-key:#ff5a48;--on-alert-key:#1c0804;--warn:#f2c14e;--warn-ink:#7a5300;--warn-line:#a87a12;
+}
+.app[data-look=jam][data-mode=dark],
+:host([data-theme=dark]) .app[data-look=jam][data-mode=auto]{
+  color-scheme:dark;
+  --bg:#10141d;--surface:#161c28;--surface-2:#202838;--text:#ece5d3;--muted:#9f9a8b;--rule:#232b3a;
+  --accent:#f08a2c;--on-accent:#1a1206;--alert:#ff8a7a;--ok:#7bd651;
+  --area-1:#8098c8;--on-area-1:#10141d;--area-2:#5ea3b3;--on-area-2:#10141d;
+  --area-3:#a58bd3;--on-area-3:#10141d;--area-4:#c09a74;--on-area-4:#10141d;
+  --sel:#ece5d3;--on-sel:#161c28;
+  --masthead:#10141d;--on-masthead:#ece5d3;--eyebrow:#9f9a8b;
+  --box:#161c28;--on-box:#ece5d3;--callbox:#161c28;--on-callbox:#ece5d3;
+  --panel:#161c28;--on-panel:#ece5d3;--panel-head:transparent;--on-panel-head:#ece5d3;--panel-mark:#c09a74;
+  --track:#232b3a;--fill:#ece5d3;--field:#10141d;--field-line:#636e87;
+  --phone:#10141d;--bezel:#232b3a;
+  --tabbar:#10141d;--on-tabbar:#9f9a8b;--tab-on:#10141d;--on-tab-on:#ece5d3;
+  --focus:#ece5d3;
+  --ink2:#d2cbb9;--inset:#1b2230;--bubble:#232c3e;--kline:#636e87;--walnut:#6b4428;
+  --alert-key:#ff5a48;--on-alert-key:#1c0804;--warn:#f2c14e;--warn-ink:#f2c14e;--warn-line:#f2c14e;
+}
+@media (prefers-color-scheme: dark){
+:host(:not([data-theme=light])) .app[data-look=jam][data-mode=auto]{
+  color-scheme:dark;
+  --bg:#10141d;--surface:#161c28;--surface-2:#202838;--text:#ece5d3;--muted:#9f9a8b;--rule:#232b3a;
+  --accent:#f08a2c;--on-accent:#1a1206;--alert:#ff8a7a;--ok:#7bd651;
+  --area-1:#8098c8;--on-area-1:#10141d;--area-2:#5ea3b3;--on-area-2:#10141d;
+  --area-3:#a58bd3;--on-area-3:#10141d;--area-4:#c09a74;--on-area-4:#10141d;
+  --sel:#ece5d3;--on-sel:#161c28;
+  --masthead:#10141d;--on-masthead:#ece5d3;--eyebrow:#9f9a8b;
+  --box:#161c28;--on-box:#ece5d3;--callbox:#161c28;--on-callbox:#ece5d3;
+  --panel:#161c28;--on-panel:#ece5d3;--panel-head:transparent;--on-panel-head:#ece5d3;--panel-mark:#c09a74;
+  --track:#232b3a;--fill:#ece5d3;--field:#10141d;--field-line:#636e87;
+  --phone:#10141d;--bezel:#232b3a;
+  --tabbar:#10141d;--on-tabbar:#9f9a8b;--tab-on:#10141d;--on-tab-on:#ece5d3;
+  --focus:#ece5d3;
+  --ink2:#d2cbb9;--inset:#1b2230;--bubble:#232c3e;--kline:#636e87;--walnut:#6b4428;
+  --alert-key:#ff5a48;--on-alert-key:#1c0804;--warn:#f2c14e;--warn-ink:#f2c14e;--warn-line:#f2c14e;
+}
+}
+@container crew (max-width:700px){
+.app[data-look=jam]{--fs-h1:30px;--fs-stat:26px;--fs-h2:24px}
+}
+.app{--dur-1:150ms;--dur-2:250ms;--dur-3:350ms;background:var(--scene,var(--bg));letter-spacing:var(--body-track,normal);
+  font-stretch:var(--body-stretch,normal);font-feature-settings:var(--font-features,normal)}
+@media (prefers-reduced-motion:reduce){.app *,.app *::before,.app *::after{transition-duration:0s!important;animation-duration:0s!important;animation-delay:0s!important}}
+.app[data-look=jam]{--dur-1:.15s;--dur-2:.25s}
+.app[data-base=panel]{--pgap:20px;--ppad:22px 26px 24px;--prad:16px;--key-h:38px}
+@container crew (max-width:700px){.app[data-base=panel]{--pgap:12px;--ppad:18px 18px 20px;--prad:14px;--key-h:44px}}
+/* ===== Crew Hub components. Tokens only, no raw colours. ===== */
+:host{display:block}
+*,*::before,*::after{box-sizing:border-box}
+.cq{container:crew / inline-size}
+.app{font-family:var(--font-body);font-size:var(--fs-md);line-height:var(--lh);color:var(--text);-webkit-font-smoothing:antialiased}
+:host([data-fill]) .app{min-height:100vh}
+@media (pointer:coarse){.app[data-base=panel]{--key-h:44px}}
+button,input,select,textarea{font:inherit;color:inherit;margin:0}
+button{cursor:pointer}
+:focus-visible{outline:var(--focus-w) solid var(--focus);outline-offset:2px}
+[hidden]{display:none!important}
+p,h2,h3,ul,ol,dl{margin:0}
+.wrap{max-width:1344px;margin:0 auto;padding:20px 28px 40px}
+@container crew (max-width:700px){.wrap{padding:12px 16px 32px}}
+
+/* masthead + headline */
+.mast{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.bt{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px}
+.brand{font:var(--display-weight) var(--fs-h3)/1.1 var(--font-display);letter-spacing:var(--display-track)}
+.fresh{font:400 var(--fs-xs)/1.3 var(--font-mono);color:var(--muted)}
+.fresh.stale{color:var(--warn-ink)}
+.sp{flex:1}
+.hb{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:var(--key-h);min-width:var(--key-h);padding:0 12px;
+  border:0;border-radius:var(--radius);background:none;box-shadow:inset 0 0 0 1px var(--rule);font:500 var(--fs-md)/1 var(--font-body)}
+.hb:hover{background:var(--inset)}
+.hb[aria-expanded=true]{background:var(--inset);box-shadow:inset 0 0 0 1.5px var(--text)}
+.hb svg{width:14px;height:14px;stroke:currentColor;stroke-width:1.8;fill:none}
+.head{font:var(--display-weight) var(--fs-h2)/var(--display-lh) var(--font-display);letter-spacing:var(--display-track);margin:4px 0 20px;text-wrap:balance}
+.jump{display:inline-block;font:inherit;letter-spacing:inherit;color:inherit;background:none;border:0;padding:9px 0;margin:-9px 0;
+  text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:5px}
+
+/* layout: phone = one column (new, plans, sessions, idle); wide = sessions left, the rest right */
+.grid{display:flex;flex-direction:column;gap:var(--pgap)}
+.side{display:contents}
+.sessions{display:flex;flex-direction:column;gap:var(--pgap);order:2;min-width:0}
+.newp,.help{order:0}.plans{order:1}.idle{order:3}
+@container crew (min-width:960px){
+  .grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(320px,1fr);align-items:start}
+  .side{display:flex;flex-direction:column;gap:var(--pgap);min-width:0;grid-column:2;grid-row:1}
+  .sessions{grid-column:1;grid-row:1}
+}
+
+/* panel structure (Callsheet data-base=panel) */
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:var(--prad);padding:var(--ppad);min-width:0;scroll-margin-top:12px;
+  transition:outline-color var(--dur-3) var(--ease)}
+.panel.flash,.irow.flash{outline:var(--focus-w) solid var(--focus);outline-offset:3px}
+.lab{font:var(--label-weight) var(--fs-xs)/1.3 var(--font-label);letter-spacing:var(--label-track);text-transform:var(--label-case);color:var(--muted)}
+.mono{font:400 var(--fs-xs)/1.4 var(--font-mono);color:var(--muted)}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 10px;min-height:24px}
+.chev{flex:none;width:8px;height:8px;margin:0 4px 3px 4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+  transform:rotate(45deg);transition:transform var(--dur-1) var(--ease)}
+[aria-expanded=true]>.chev{transform:translateY(3px) rotate(225deg)}
+
+/* keys (pass 6 / Callsheet panel keys) */
+.k{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:var(--key-h);min-width:var(--key-h);padding:0 16px;border:0;
+  border-radius:var(--radius);background:var(--surface);color:var(--text);box-shadow:inset 0 0 0 1px var(--kline);
+  font:500 var(--fs-md)/1 var(--font-body);transition:background-color var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.k:hover{background:var(--surface-2)}
+.k.go{background:var(--accent);color:var(--on-accent);box-shadow:none}
+.k.dark{background:var(--text);color:var(--surface);box-shadow:none}
+.k.on{background:var(--inset);box-shadow:inset 0 0 0 1.5px var(--text)}
+.k.q{background:none;box-shadow:none;padding:0 8px;color:var(--ink2);font-weight:400;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:4px}
+.k.q:hover{color:var(--text)}
+.k:disabled{opacity:.45;cursor:default}
+.keys{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.fb{font:400 var(--fs-xs)/1.4 var(--font-mono);color:var(--ink2)}
+.fb.err{color:var(--alert)}
+
+/* plans: signature 1, the segmented track (one segment per task) */
+.pl{list-style:none;padding:0;display:grid;gap:2px}
+.plan{display:grid;gap:7px;width:calc(100% + 20px);margin:0 -10px;padding:9px 10px;text-align:left;background:none;border:0;border-radius:10px}
+.plan:hover{background:var(--inset)}
+.pt{display:flex;align-items:baseline;justify-content:space-between;gap:12px;min-width:0}
+.pn{font:500 var(--fs-md)/1.3 var(--font-body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pc{flex:none;font:400 var(--fs-xs)/1 var(--font-mono);color:var(--ink2)}
+.plan.fin .pn{color:var(--ink2);font-weight:400}
+.pm{font:400 var(--fs-xs)/1.2 var(--font-mono);color:var(--muted)}
+.pm .al{color:var(--alert)}
+.seg{display:flex;gap:3px;height:8px}
+.seg i{flex:1;border-radius:2px;box-shadow:inset 0 0 0 1px var(--kline)}
+.seg i.done{background:var(--fill);box-shadow:none}
+.seg i.running{background:var(--ok);box-shadow:none}
+.seg i.failed{background:var(--alert);box-shadow:none}
+.seg.bar{background:var(--track);border-radius:2px}.seg.bar i{flex:none;box-shadow:none}
+
+/* session panel */
+.sess{display:grid;gap:14px}
+.sess.cue-you{box-shadow:inset 3px 0 0 var(--text)}
+.sess.cue-al{box-shadow:inset 3px 0 0 var(--alert)}
+.sh{display:flex;align-items:baseline;justify-content:space-between;gap:6px 12px;flex-wrap:wrap}
+.sn{font:var(--display-weight) var(--fs-h3)/1.2 var(--font-display);letter-spacing:var(--display-track);min-width:0;overflow-wrap:anywhere}
+.st{flex:none;font:400 var(--fs-xs)/1 var(--font-mono);color:var(--muted)}
+.st.you{background:var(--text);color:var(--surface);padding:6px 10px;border-radius:999px;letter-spacing:.04em}
+.st.off{color:var(--alert)}
+.st.off::before,.im .off::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--alert);margin-right:6px}
+.sum{color:var(--ink2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.metaw{display:grid;gap:6px}
+.meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px;font:400 var(--fs-xs)/1.4 var(--font-mono);color:var(--muted)}
+.meta .warn{color:var(--warn-ink)}
+.ctx{height:4px;border-radius:2px;background:var(--track);overflow:hidden}
+.ctx i{display:block;height:100%;background:var(--fill)}
+.ctx.warn i{background:var(--warn-ink)}
+
+/* the ask (waiting prompt) */
+.ask{background:var(--inset);border-radius:12px;padding:14px 16px;display:grid;gap:10px}
+.at{display:flex;align-items:baseline;gap:4px 12px;flex-wrap:wrap}
+.aq{font:400 var(--fs-h3)/1.3 var(--font-body)}
+.note{width:100%}
+
+/* agents: signature 2, the thread (a hairline spine; nodes carry state) */
+.thread{position:relative;display:grid;gap:12px;padding-left:24px}
+.thread::before{content:"";position:absolute;left:5px;top:10px;bottom:10px;width:1px;background:var(--kline)}
+.ag{position:relative;min-width:0}
+.node{position:absolute;left:-24px;top:6px;width:11px;height:11px;border-radius:50%;background:var(--surface);box-shadow:inset 0 0 0 1.5px var(--kline)}
+.ag.run .node{background:var(--ok);box-shadow:0 0 0 3px var(--surface)}
+.ag.done .node{background:var(--muted);box-shadow:0 0 0 3px var(--surface);transform:scale(.7)}
+.ag.failed .node{background:var(--alert);border-radius:2px;box-shadow:0 0 0 3px var(--surface);transform:rotate(45deg) scale(.8)}
+.agb{display:grid;gap:2px;width:100%;padding:0;background:none;border:0;text-align:left;border-radius:6px}
+.agt{display:flex;justify-content:space-between;align-items:baseline;gap:12px;min-width:0}
+.agn{font:500 var(--fs-md)/1.3 var(--font-body);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.age{flex:none;font:400 var(--fs-xs)/1 var(--font-mono);color:var(--ink2)}
+.now{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity var(--dur-2) var(--ease)}
+.agm{font:400 var(--fs-xs)/1.4 var(--font-mono);color:var(--muted)}
+.trail{list-style:none;padding:8px 0 0;display:grid;gap:4px}
+.trail li{display:flex;gap:10px;color:var(--ink2);min-width:0}
+.trail .tm{flex:none;font:400 var(--fs-xs)/1.6 var(--font-mono);color:var(--muted)}
+.agl{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agl .tw{font:400 var(--fs-xs)/1 var(--font-mono);margin-right:8px}
+.ag.failed .agl .tw{color:var(--alert)}
+.tf{display:flex;flex-wrap:wrap;gap:0 4px;margin:4px 0 -8px 16px}
+
+/* queue + actions + drawers */
+.next{display:flex;align-items:center;gap:10px;width:100%;min-height:var(--key-h);padding:0;background:none;border:0;border-top:1px solid var(--rule);text-align:left}
+.next .nt{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tasks{list-style:none;padding:4px 0 0;display:grid;gap:6px}
+.tasks li{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px;align-items:baseline}
+.tasks .tw{font:400 var(--fs-xs)/1 var(--font-mono);color:var(--muted)}
+.tasks li.running .tw{color:var(--text)}
+.tasks li.failed .tw{color:var(--alert)}
+.tasks li.done .tt{color:var(--muted)}
+.tier{font:400 var(--fs-xs)/1 var(--font-mono);color:var(--muted)}
+.acts{display:flex;flex-wrap:wrap;gap:4px;margin:-6px 0 -8px -8px}
+.actw{display:grid;gap:12px}
+.comp,.more{display:grid;gap:10px}
+.more{background:var(--inset);border-radius:12px;padding:14px 16px}
+.crow{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 16px;font:400 var(--fs-xs)/1.4 var(--font-mono)}
+.kv dt{color:var(--muted)}.kv dd{margin:0;color:var(--ink2);overflow-wrap:anywhere}
+
+/* fields + flat tick box */
+input[type=text],select,textarea{width:100%;min-height:var(--key-h);padding:0 12px;background:var(--field);color:var(--text);
+  border:1px solid var(--field-line);border-radius:var(--radius);font:400 var(--fs-md)/1.3 var(--font-body)}
+textarea{padding:9px 12px;resize:vertical;display:block}
+.tick{display:inline-flex;align-items:center;gap:10px;min-height:var(--key-h);cursor:pointer}
+.tick input{appearance:none;-webkit-appearance:none;flex:none;width:20px;height:20px;border-radius:5px;background:var(--field);border:1.5px solid var(--field-line)}
+.tick input:checked{background:var(--text);border-color:var(--text);box-shadow:inset 0 0 0 3px var(--field)}
+.form{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+.f{display:grid;gap:6px;min-width:0}.f.wide{grid-column:1/-1}
+
+/* idle */
+.fold{display:flex;align-items:center;gap:10px;width:100%;min-height:var(--key-h);padding:0;background:none;border:0;text-align:left}
+.fold .cnt{font:400 var(--fs-xs)/1 var(--font-mono);color:var(--ink2)}
+.fold .chev{margin-left:auto}
+.irows{list-style:none;padding:6px 0 0}
+.irow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;border-top:1px solid var(--rule);border-radius:2px}
+.ib{display:grid;gap:2px;min-width:0;min-height:var(--key-h);padding:10px 0;background:none;border:0;text-align:left}
+.in{font:500 var(--fs-md)/1.3 var(--font-body)}
+.im{font:400 var(--fs-xs)/1.4 var(--font-mono);color:var(--muted)}
+.im .off{color:var(--alert)}
+.is{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.irow.open .is{white-space:normal}
+.x{width:var(--key-h);height:var(--key-h);margin:4px -10px 0 0;border:0;border-radius:var(--radius);background:none;color:var(--muted);font:400 22px/1 var(--font-body)}
+.x:hover{background:var(--inset);color:var(--text)}
+.idet{grid-column:1/-1;padding:0 0 14px}
+.gone{grid-column:1/-1;display:flex;align-items:center;gap:8px;min-height:var(--key-h)}
+.help p{color:var(--ink2);margin:0 0 6px}
+</style></template>
+
+<script type="application/json" id="fixture">{"nas":{"status":"online","machine":{"id":"nas","name":"nas","version":"0.2.0","updatedAt":"2026-10-26T14:29:58Z","commands":{"enabled":true,"folders":[{"key":"jamfin","label":"Jamfin"},{"key":"crew-hub","label":"Crew Hub"},{"key":"home-assistant","label":"Home Assistant"}],"models":["claude-opus-5-5","claude-sonnet-5"],"permissionModes":["default","acceptEdits","auto","plan"]}},"sessions":[{"id":"8c1f2a4e-3b7d-4e19-9a61-0f2d5c7b9e10","ccr":"session_01BPprSFdhBQg3taJLueQEUy","kind":"interactive","controls":["send","answer"],"name":"Jamfin","project":"jamfin","status":"working","summary":"Verifying the disc engine on the Hisense: 6 of 7 fixes accepted, menu overlay fix running.","model":"claude-opus-5-5","effort":"high","ctx":{"used":142000,"max":200000},"costUsd":3.84,"tokens":{"in":41200,"out":96400,"cacheRead":3020000,"cacheWrite":182000,"cacheHit":0.931,"turns":412},"startedAt":"2026-10-26T13:05:12Z","updatedAt":"2026-10-26T14:29:58Z","tasks":[],"plan":{"title":"Jamfin: verify on the TV and fix","phase":"verify","done":6,"total":7,"finished":false,"updatedAt":"2026-10-26T14:28:40Z","tasks":[{"id":"t1","title":"Probe libbluray build for arm64","tier":"heavy","status":"done","order":1,"agentId":"a5c1e0d2b7f94e31","summary":"libbluray 1.3.4 builds with the NDK r27; BD-J disabled."},{"id":"t2","title":"Index sample ISOs in ~/media/Bluray","tier":"light","status":"done","order":2,"agentId":"a19b8e7c2d3f4a55","summary":"14 ISOs indexed; 3 use BD-J menus."},{"id":"t3","title":"HDR10 passthrough on ExoPlayer","tier":"medium","status":"done","order":3,"agentId":"a2e8d4c6b1f07a92"},{"id":"t4","title":"Remote key mapping for menus","tier":"light","status":"done","order":4,"agentId":"a6b0c2d4e8f13579"},{"id":"t5","title":"Install the debug build on the TV","tier":"light","status":"done","order":5,"agentId":"a4d6f8b0c2e13579"},{"id":"t6","title":"Audio track switch from the menu","tier":"medium","status":"done","order":6,"agentId":"a8e0a2c4e6f13579"},{"id":"t7","title":"Menu overlay renderer (IG streams)","tier":"careful","status":"running","order":7,"agentId":"a7f3c2e1d9b84a60"}],"source":"file"},"agents":[{"id":"a7f3c2e1d9b84a60","type":"savvy-flow:savvy-careful","title":"Menu overlay renderer (IG streams)","model":"claude-opus-5-5","status":"running","startedAt":"2026-10-26T14:12:05Z","endedAt":null,"steps":23,"current":{"text":"Decode IG segment palette from 00001.m2ts","at":"2026-10-26T14:29:41Z"},"trail":[{"text":"Read BDMV/PLAYLIST/00000.mpls","at":"2026-10-26T14:24:10Z"},{"text":"Build disc-engine module with Gradle","at":"2026-10-26T14:26:52Z"},{"text":"Run IG parser unit tests","at":"2026-10-26T14:28:30Z"}],"tokens":{"in":1200,"out":8800,"cacheRead":34000,"cacheWrite":4000}},{"id":"a2e8d4c6b1f07a92","type":"savvy-flow:savvy-medium","title":"HDR10 passthrough on ExoPlayer","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T13:50:33Z","endedAt":"2026-10-26T14:08:12Z","steps":9,"current":{"text":"Check display HDR capabilities over adb","at":"2026-10-26T14:07:58Z"},"trail":[{"text":"Sort HDR10 titles by play count and read first row","at":"2026-10-26T13:51:02Z"},{"text":"Read MediaCodec tunneling notes","at":"2026-10-26T13:54:47Z"},{"text":"Install debug APK on the TV","at":"2026-10-26T13:57:15Z"}],"summary":"HDR10 passes through with tunneling on; Dolby Vision falls back to HDR10."},{"id":"a19b8e7c2d3f4a55","type":"savvy-flow:savvy-light","title":"Index sample ISOs in ~/media/Bluray","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T13:41:20Z","endedAt":"2026-10-26T13:42:01Z","steps":4,"summary":"14 ISOs indexed; 3 use BD-J menus, 11 use HDMV IG menus.","current":{"text":"Write index to fixtures/discs.json","at":"2026-10-26T13:41:58Z"},"trail":[{"text":"List ISO files under ~/media/Bluray","at":"2026-10-26T13:41:25Z"},{"text":"Read index.bdmv from each ISO","at":"2026-10-26T13:41:44Z"},{"text":"Write index to fixtures/discs.json","at":"2026-10-26T13:41:58Z"}]},{"id":"a5c1e0d2b7f94e31","type":"savvy-flow:savvy-heavy","title":"Probe libbluray build for arm64","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T13:20:02Z","endedAt":"2026-10-26T13:38:45Z","steps":31,"summary":"libbluray 1.3.4 builds with the NDK r27; BD-J disabled.","trail":[]},{"id":"a6b0c2d4e8f13579","type":"savvy-flow:savvy-light","title":"Remote key mapping for menus","model":"claude-opus-5-5","status":"stopped","startedAt":"2026-10-26T13:44:10Z","endedAt":"2026-10-26T13:52:30Z","steps":7,"stopReason":"session restarted","trail":[]},{"id":"a4d6f8b0c2e13579","type":"savvy-flow:savvy-light","title":"Install the debug build on the TV","model":"claude-opus-5-5","status":"failed","startedAt":"2026-10-26T13:58:00Z","endedAt":"2026-10-26T14:01:20Z","steps":6,"summary":"adb refused: the TV's wireless debugging pairing expired.","trail":[]},{"id":"a8e0a2c4e6f13579","type":"savvy-flow:savvy-medium","title":"Audio track switch from the menu","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T14:02:00Z","endedAt":"2026-10-26T14:11:40Z","steps":12,"summary":"Audio stream switch wired to the IG button commands.","trail":[]},{"id":"a0c0ffee00000001","type":"general-purpose","title":null,"model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T14:00:00Z","endedAt":"2026-10-26T14:00:01Z","steps":0,"trail":[]}],"localName":"project-ac"},{"id":"3f7d1c92-6e4a-4b08-9c15-7a2e5b8d0f43","ccr":"session_01NerveOSResumeStopped","kind":"interactive","controls":["send","answer"],"name":"NerveOS: resume stopped agent work","localName":"project-4f","project":"nerveos","status":"working","summary":"Two agents stopped when the session restarted; re-running the sensor bridge first.","model":"claude-opus-5-5","effort":"high","ctx":{"used":88000,"max":200000},"costUsd":1.92,"startedAt":"2026-10-26T13:30:00Z","updatedAt":"2026-10-26T14:29:30Z","tasks":[],"plan":{"title":"NerveOS: resume stopped agent work","phase":"build","done":1,"total":4,"finished":false,"updatedAt":"2026-10-26T14:29:20Z","tasks":[{"id":"n1","title":"Audit what the stopped agents left behind","tier":"light","status":"done","order":1,"agentId":"b1a2c3d4e5f60718"},{"id":"n2","title":"Sensor bridge: MQTT discovery for the hub","tier":"medium","status":"running","order":2,"agentId":"b2c3d4e5f6071829"},{"id":"n3","title":"Battery report every 15 min","tier":"light","status":"queued","order":3},{"id":"n4","title":"Retain-flag audit on command topics","tier":"careful","status":"queued","order":4}],"source":"file"},"agents":[{"id":"b2c3d4e5f6071829","type":"savvy-flow:savvy-medium","title":"Sensor bridge: MQTT discovery for the hub","model":"claude-opus-5-5","status":"running","startedAt":"2026-10-26T14:15:00Z","endedAt":null,"steps":14,"current":{"text":"Publish discovery config for the light sensor","at":"2026-10-26T14:29:25Z"},"trail":[{"text":"Read the old bridge's config","at":"2026-10-26T14:18:00Z"},{"text":"Run the bridge unit tests","at":"2026-10-26T14:24:40Z"}]},{"id":"b1a2c3d4e5f60718","type":"savvy-flow:savvy-light","title":"Audit what the stopped agents left behind","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T14:01:00Z","endedAt":"2026-10-26T14:12:30Z","steps":9,"summary":"Bridge half-written, battery task untouched; nothing to roll back.","trail":[]},{"id":"b3d4e5f607182930","type":"savvy-flow:savvy-medium","title":"Sensor bridge (first try)","model":"claude-opus-5-5","status":"stopped","startedAt":"2026-10-26T13:35:00Z","endedAt":"2026-10-26T13:58:10Z","steps":21,"stopReason":"Remote Control session restarted","trail":[]},{"id":"b4e5f60718293041","type":"savvy-flow:savvy-light","title":"Battery report every 15 min (first try)","model":"claude-opus-5-5","status":"stopped","startedAt":"2026-10-26T13:36:00Z","endedAt":"2026-10-26T13:58:10Z","steps":3,"stopReason":"Remote Control session restarted","trail":[]}]},{"id":"b8e41f03-2c6a-47d9-8e15-3a90c6d2f7e1","ccr":null,"kind":"bg","controls":["send","answer","interrupt","stop"],"name":"Crew Hub","project":"crew-hub","status":"working","summary":"Card v0.4.0: active plans stack, idle section and clear finished.","model":"claude-opus-5-5","effort":"high","ctx":{"used":64000,"max":200000},"costUsd":null,"tokens":{"in":4000,"out":14000,"cacheRead":280000,"cacheWrite":14000,"cacheHit":0.94,"turns":96},"startedAt":"2026-10-26T11:50:00Z","updatedAt":"2026-10-26T14:29:50Z","tasks":[{"id":"1","subject":"[light] Crew Hub: Write the snapshot fixture","status":"completed"},{"id":"2","subject":"[careful] Crew Hub: Build the Lovelace card","status":"in_progress"},{"id":"3","subject":"[medium] Crew Hub: Draft the crew_hub integration","status":"pending"}],"agents":[{"id":"c1d2e3f405162738","type":"savvy-flow:savvy-careful","title":"Build the Lovelace card","model":"claude-opus-5-5","status":"running","startedAt":"2026-10-26T14:05:00Z","endedAt":null,"steps":48,"current":{"text":"Run the card checks in Playwright","at":"2026-10-26T14:29:44Z"},"trail":[{"text":"Add crew_hub/dismiss websocket","at":"2026-10-26T14:20:00Z"}],"tokens":{"in":600,"out":5400,"cacheRead":61000,"cacheWrite":9000}},{"id":"c2e3f40516273849","type":"savvy-flow:savvy-medium","title":"Write the snapshot fixture #1","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T13:40:00Z","endedAt":"2026-10-26T14:02:00Z","steps":26,"summary":"Daemon sends the CCR title as the session name.","trail":[],"tokens":{"in":300,"out":2700,"cacheRead":25000,"cacheWrite":3000}}],"localName":"project-c1","plan":{"title":"Crew Hub: 3 tasks","phase":"delegate","done":1,"total":3,"finished":false,"updatedAt":"2026-10-26T14:27:00Z","source":"tasks","tasks":[{"id":"1","title":"Write the snapshot fixture","tier":"light","status":"done","order":1,"agentId":"c2e3f40516273849","summary":null},{"id":"2","title":"Build the Lovelace card","tier":"careful","status":"running","order":2,"agentId":"c1d2e3f405162738","summary":null},{"id":"3","title":"Draft the crew_hub integration","tier":"medium","status":"queued","order":3,"agentId":null,"summary":null}]}},{"id":"4d2b9c71-8a0e-4f3b-b5d6-91c7e2a0f4b8","ccr":"session_012zoHCHE3a15umwYuRC4XwL","kind":"interactive","controls":["send","answer"],"name":"Home Assistant Mr Manager","project":"home-assistant","status":"waiting","waiting":{"kind":"permission","tool":"Bash","text":"Reconnect adb to the Hisense TV","requestId":"req_7f31a2","since":"2026-10-26T14:26:30Z","hubCanAnswer":true},"summary":"Checking why the TV's picture-mode entity went unavailable after the reboot.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":181500,"max":200000},"costUsd":1.27,"startedAt":"2026-10-26T12:40:00Z","updatedAt":"2026-10-26T14:26:30Z","tasks":[],"agents":[]},{"id":"6a0e7d52-1f84-4c3b-9d27-58b1e3c4a9f6","ccr":null,"kind":"bg","controls":["send","answer","interrupt","stop"],"name":"Music Assistant tidy-up","project":"pi-sendspin","status":"waiting","waiting":{"kind":"question","tool":"AskUserQuestion","text":"Which player should stay the default?","requestId":"req_c41d09","since":"2026-10-26T14:28:10Z","hubCanAnswer":true,"questions":[{"question":"Which player should stay the default?","header":"Player","multiSelect":false,"options":["Kitchen Pi","OnePlus 5T"]}]},"summary":"Cleaning up duplicate Sendspin players in Music Assistant.","model":"claude-sonnet-5","effort":"medium","ctx":{"used":38000,"max":200000},"costUsd":0.41,"startedAt":"2026-10-26T14:02:00Z","updatedAt":"2026-10-26T14:28:10Z","tasks":[],"agents":[]},{"id":"e5c7a913-0b2d-4f6e-8a14-c3d5e7f9a1b2","ccr":null,"kind":"bg","controls":["send","interrupt","stop"],"name":"error demo","project":"crew-hub","status":"idle","summary":"Preview only: every command to this session comes back with an error.","model":"claude-opus-5-5","effort":"low","ctx":{"used":12000,"max":200000},"costUsd":0.05,"startedAt":"2026-10-26T13:00:00Z","updatedAt":"2026-10-26T13:10:00Z","tasks":[],"agents":[]},{"id":"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","ccr":null,"kind":"bg","controls":["send","interrupt","stop"],"name":"Echo Show kiosk","project":"echo-show-kiosk","status":"idle","summary":"ShowKiosk 1.4 installed; watchdog restart verified overnight.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":40000,"max":200000},"costUsd":0.5,"startedAt":"2026-10-26T09:00:00Z","updatedAt":"2026-10-26T13:20:00Z","tasks":[],"agents":[]},{"id":"1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e","ccr":null,"kind":"bg","controls":["send","interrupt","stop"],"name":"Sendspin Speaker","project":"sendspin-android","status":"idle","summary":"Buffer set to 2000 ms; drift under 5 ms over an hour.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":40000,"max":200000},"costUsd":0.5,"startedAt":"2026-10-26T09:00:00Z","updatedAt":"2026-10-26T12:55:00Z","tasks":[],"agents":[]},{"id":"2c3d4e5f-6a7b-4c8d-0e9f-1a2b3c4d5e6f","ccr":null,"kind":"bg","controls":["send","interrupt","stop"],"name":"Retro frontend","project":"retro-frontend","status":"idle","summary":"Moonlight tile and controller navigation merged.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":40000,"max":200000},"costUsd":0.5,"startedAt":"2026-10-26T09:00:00Z","updatedAt":"2026-10-26T12:10:00Z","tasks":[],"agents":[{"id":"d1e2f30415263748","type":"savvy-flow:savvy-medium","title":"Moonlight tile","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T11:30:00Z","endedAt":"2026-10-26T11:52:00Z","steps":18,"summary":"Tile launches Moonlight with the Aero host.","trail":[]},{"id":"d2f3041526374859","type":"savvy-flow:savvy-medium","title":"Controller focus ring","model":"claude-opus-5-5","status":"done","startedAt":"2026-10-26T11:31:00Z","endedAt":"2026-10-26T11:47:00Z","steps":11,"summary":"Focus ring follows the D-pad in every row.","trail":[]}]},{"id":"3d4e5f6a-7b8c-4d9e-1f0a-2b3c4d5e6f7a","ccr":null,"kind":"bg","controls":["send","interrupt","stop"],"name":"Flicker meter","project":"flicker-meter","status":"idle","summary":"Rolling-shutter maths fixed for the 7 Pro's 60 Hz readout; plan finished.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":40000,"max":200000},"costUsd":0.5,"startedAt":"2026-10-26T09:00:00Z","updatedAt":"2026-10-26T14:26:00Z","tasks":[],"agents":[],"plan":{"title":"Flicker meter: 7 Pro readout fix","phase":"finished","done":3,"total":3,"finished":true,"updatedAt":"2026-10-26T14:25:30Z","tasks":[{"id":"f1","title":"Measure readout time","tier":"light","status":"done","order":1},{"id":"f2","title":"Fix the band maths","tier":"medium","status":"done","order":2},{"id":"f3","title":"Re-test on the 3T","tier":"light","status":"done","order":3}],"source":"file"}},{"id":"4e5f6a7b-8c9d-4e0f-2a1b-3c4d5e6f7a8b","ccr":null,"kind":"bg","controls":["send","interrupt","stop"],"name":"Aero 15 steambox","project":"aero15-steambox","status":"idle","summary":"Suspend test passed 5 of 5; WoL resume still to repeat.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":40000,"max":200000},"costUsd":0.5,"startedAt":"2026-10-26T09:00:00Z","updatedAt":"2026-10-26T12:15:00Z","tasks":[],"agents":[],"plan":{"title":"Aero 15: sleep and wake","phase":"finished","done":2,"total":2,"finished":true,"updatedAt":"2026-10-26T12:12:00Z","tasks":[{"id":"s1","title":"s2idle loop test","tier":"light","status":"done","order":1},{"id":"s2","title":"WoL resume","tier":"light","status":"done","order":2}],"source":"file"}}]},"mac":{"status":"offline","machine":{"id":"mac","name":"mac","version":"0.1.0","updatedAt":"2026-10-26T13:52:10Z"},"sessions":[{"id":"f0a3c5e7-9b1d-4c2e-a6f8-0d1e2f3a4b5c","ccr":"session_01Xh7TqArtemisPadKiosk","name":"Artemis - iPad kiosk","project":"pad-kiosk","status":"ended","summary":"PadKiosk v0.1.1 built and installed; black screen on wake fixed.","model":"claude-opus-5-5","effort":"medium","ctx":{"used":98000,"max":200000},"costUsd":2.06,"startedAt":"2026-10-26T10:15:00Z","updatedAt":"2026-10-26T13:51:40Z","tasks":[],"agents":[]}]}}</script>
+<script>
+(function () {
+'use strict';
+var FIX = JSON.parse(document.getElementById('fixture').textContent);
+var Q = new URLSearchParams(location.search);
+var OPEN = (Q.get('open') || '').split(',');
+// Mockup clock: the fixture's "now" (preview.html), ticking from page load. Times shown as fixture (UTC) clock times.
+var NOW0 = Date.parse('2026-10-26T14:30:00Z'), T0 = Date.now();
+var HELD_MS = 30 * 60e3, FIN_PLAN_MS = 10 * 60e3, STALE_MS = 90e3, ARM_MS = 4000, MAX_PLANS = 4, MAX_IDLE = 40;
+var REDUCED = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+var PERM = {default: 'Ask first', acceptEdits: 'Accept edits', auto: 'Auto', plan: 'Plan only'};
+var WORD = {queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed'};
+
+function now() { return NOW0 + (Date.now() - T0); }
+function ts(iso) { var v = Date.parse(iso || ''); return isNaN(v) ? null : v; }
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+function hm(ms) { var d = new Date(ms); return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()); }
+function span(ms) {
+  var s = Math.max(0, Math.floor(ms / 1000)); if (s < 60) return s + ' s';
+  var m = Math.floor(s / 60); if (m < 60) return m + ' min';
+  var hr = Math.floor(m / 60); return hr < 48 ? hr + ' h' : Math.floor(hr / 24) + ' d';
+}
+function tok(n) { return n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n || 0); }
+function tokSum(x) { return x ? (x.in || 0) + (x.out || 0) + (x.cacheRead || 0) + (x.cacheWrite || 0) : 0; }
+function modelName(m) { var r = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(m || ''); return r ? r[1].charAt(0).toUpperCase() + r[1].slice(1) + ' ' + r[2] + (r[3] ? '.' + r[3] : '') : (m || ''); }
+function tierOf(type) { var r = /-(light|medium|heavy|careful)$/.exec(type || ''); return r ? r[1] : ''; }
+function byStart(a, b) { return (ts(a.startedAt) || 0) - (ts(b.startedAt) || 0); }
+
+function h(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; }
+function ap(p) { for (var i = 1; i < arguments.length; i++) { var c = arguments[i]; if (c) p.appendChild(c); } return p; }
+function key(text, cls, fn) { var b = h('button', 'k' + (cls ? ' ' + cls : ''), text); b.type = 'button'; if (fn) b.addEventListener('click', fn); return b; }
+function chev() { var c = h('span', 'chev'); c.setAttribute('aria-hidden', 'true'); return c; }
+function say(fb, text, kind) { fb.textContent = text; fb.className = 'fb' + (kind === 'err' ? ' err' : ''); fb.hidden = false; }
+function plusIcon() {
+  var NS = 'http://www.w3.org/2000/svg', s = document.createElementNS(NS, 'svg'), p = document.createElementNS(NS, 'path');
+  s.setAttribute('viewBox', '0 0 14 14'); s.setAttribute('aria-hidden', 'true'); p.setAttribute('d', 'M7 1.5v11M1.5 7h11'); s.appendChild(p); return s;
+}
+function toggler(btn, target, onOpen) {
+  btn.setAttribute('aria-expanded', String(!target.hidden));
+  btn.addEventListener('click', function () { var open = target.hidden; target.hidden = !open; btn.setAttribute('aria-expanded', String(open)); if (open && onOpen) onOpen(); });
+}
+function twoTap(btn, label, armed, fb, guard, fire) {
+  var timer = null;
+  function reset() { btn.textContent = label; btn.classList.remove('dark'); }
+  btn.addEventListener('click', function () {
+    if (timer) { clearTimeout(timer); timer = null; reset(); fire(); return; }
+    var err = guard && guard(); if (err) { say(fb, err, 'err'); return; }
+    btn.textContent = armed; btn.classList.add('dark');
+    timer = setTimeout(function () { timer = null; reset(); }, ARM_MS);
+  });
+}
+
+class CrewHubCard extends HTMLElement {
+  constructor() { super(); this.attachShadow({mode: 'open'}); this._ticks = []; }
+  connectedCallback() { if (!this._app) this._render(); }
+  setMode(m) { this._app.dataset.mode = m; }
+  setTheme(t) { if (t) this.setAttribute('data-theme', t); else this.removeAttribute('data-theme'); }
+  _tick(fn) { this._ticks.push(fn); fn(); }
+
+  _collect() {
+    var machines = [], sessions = [];
+    Object.keys(FIX).forEach(function (mk) {
+      var m = FIX[mk] || {}, mc = m.machine || {}, online = m.status === 'online';
+      var canCmd = online && !!(mc.commands && mc.commands.enabled);
+      machines.push({id: mk, name: mc.name || mk, online: online, updatedAt: ts(mc.updatedAt), cmd: mc.commands || null});
+      (m.sessions || []).forEach(function (s) { sessions.push({s: s, m: mk, mname: mc.name || mk, online: online, canCmd: canCmd}); });
+    });
+    return {machines: machines, sessions: sessions};
+  }
+
+  _render() {
+    var self = this, root = this.shadowRoot, D = this._collect();
+    this._root = root;
+    root.appendChild(document.getElementById('crew-hub-css').content.cloneNode(true));
+    var active = D.sessions.filter(function (x) { return x.s.status === 'working' || x.s.status === 'waiting'; });
+    var rest = D.sessions.filter(function (x) { return active.indexOf(x) < 0; })
+      .sort(function (a, b) { return (ts(b.s.updatedAt) || 0) - (ts(a.s.updatedAt) || 0); }).slice(0, MAX_IDLE);
+    this._multi = new Set(active.map(function (x) { return x.m; })).size > 1;
+    this._idleMulti = new Set(rest.map(function (x) { return x.m; })).size > 1;
+    // The one orange key: the oldest prompt the hub can answer.
+    var asks = active.filter(function (x) { return self._canAnswer(x); })
+      .sort(function (a, b) { return (ts(a.s.waiting.since) || 0) - (ts(b.s.waiting.since) || 0); });
+    this._goId = asks.length ? asks[0].s.id : null;
+
+    var cq = h('div', 'cq'), app = h('div', 'app'), wrap = h('div', 'wrap');
+    app.dataset.look = 'jam'; app.dataset.base = 'panel'; app.dataset.mode = Q.get('mode') || 'auto';
+    this._app = app;
+    this.setTheme(Q.get('theme'));
+
+    var help = this._help(), newp = this._newPanel(D.machines);
+    var hNew = h('button', 'hb'); hNew.type = 'button'; ap(hNew, plusIcon(), document.createTextNode('New'));
+    var hHelp = h('button', 'hb', '?'); hHelp.type = 'button'; hHelp.setAttribute('aria-label', 'Help');
+    toggler(hNew, newp, function () { newp.querySelector('input').focus(); });
+    toggler(hHelp, help);
+    var fresh = h('span', 'fresh');
+    var last = Math.max.apply(null, [0].concat(D.machines.filter(function (m) { return m.online; }).map(function (m) { return m.updatedAt || 0; })));
+    this._tick(function () {
+      if (!last) { fresh.textContent = '▲ No machine online'; fresh.classList.add('stale'); return; }
+      var d = now() - last, stale = d > STALE_MS;
+      fresh.textContent = (stale ? '▲ ' : '') + 'Updated ' + span(d) + ' ago'; fresh.classList.toggle('stale', stale);
+    });
+    ap(wrap, ap(h('header', 'mast'), ap(h('div', 'bt'), h('h2', 'brand', 'Crew Hub'), fresh), hNew, hHelp), this._headline(active, D.sessions.length));
+
+    var grid = h('div', 'grid'), side = h('div', 'side'), sess = h('div', 'sessions');
+    active.forEach(function (x) { sess.appendChild(self._sess(x)); });
+    ap(side, help, newp, this._plans(D.sessions), rest.length ? this._idle(rest) : null);
+    ap(wrap, ap(grid, sess, side));
+    root.appendChild(ap(cq, ap(app, wrap)));
+    setInterval(function () { self._ticks.forEach(function (f) { f(); }); }, 1000);
+
+    var openBtn = function (sel) { var b = root.querySelector(sel); if (b && b.getAttribute('aria-expanded') === 'false') b.click(); };
+    if (OPEN.indexOf('idle') >= 0) openBtn('.fold');
+    if (OPEN.indexOf('new') >= 0) { newp.hidden = false; hNew.setAttribute('aria-expanded', 'true'); }
+    if (OPEN.indexOf('help') >= 0) openBtn('.hb[aria-label=Help]');
+    if (OPEN.indexOf('trail') >= 0) openBtn('.ag.run .agb');
+    if (OPEN.indexOf('more') >= 0) openBtn('.sess .acts .k:last-child');
+  }
+
+  _canAnswer(x) {
+    var s = x.s, w = s.waiting;
+    return x.canCmd && s.status === 'waiting' && (s.controls || []).indexOf('answer') >= 0 && !!w && w.hubCanAnswer === true && !!w.requestId;
+  }
+
+  _goTo(x) {
+    var el = this._root.getElementById('sess-' + x.s.id); if (!el) return;
+    if (el.classList.contains('irow')) { var f = this._root.querySelector('.fold'); if (f && f.getAttribute('aria-expanded') === 'false') f.click(); }
+    el.scrollIntoView({behavior: REDUCED ? 'auto' : 'smooth', block: 'start'});
+    el.focus({preventScroll: true});
+    el.classList.add('flash'); setTimeout(function () { el.classList.remove('flash'); }, 1200);
+  }
+
+  _headline(active, total) {
+    var self = this, el = h('p', 'head');
+    var wt = active.filter(function (x) { return x.s.status === 'waiting'; }), wk = active.filter(function (x) { return x.s.status === 'working'; });
+    if (wt.length) {
+      var first = wt.filter(function (x) { return x.s.id === self._goId; })[0] || wt[0];
+      var j = h('button', 'jump', wt.length + (wt.length === 1 ? ' needs you' : ' need you')); j.type = 'button';
+      j.addEventListener('click', function () { self._goTo(first); });
+      ap(el, j, document.createTextNode(wk.length ? ', ' + wk.length + ' working.' : '.'));
+    } else el.textContent = wk.length ? wk.length + ' working. Nothing needs you.' : total ? 'All quiet.' : 'No sessions yet.';
+    return el;
+  }
+
+  _help() {
+    var p = h('section', 'panel help'); p.hidden = true;
+    ap(p, ap(h('div', 'ph'), h('h3', 'lab', 'Help')),
+      h('p', null, 'Needs you: a session waits for your answer. Answer here or in claude.ai.'),
+      h('p', null, 'Urgent messages stop the current reply first.'),
+      h('p', null, 'Interrupt and Stop work on background sessions. Both ask for a second tap.'),
+      h('p', null, '▲ Updated means no report from your machines for a while.'));
+    return p;
+  }
+
+  // ---------- plans ----------
+  _tasksOf(s) {
+    if (s.plan && Array.isArray(s.plan.tasks) && s.plan.tasks.length)
+      return s.plan.tasks.slice().sort(function (a, b) { return (a.order || 0) - (b.order || 0); }).map(function (t) {
+        return {title: t.title || t.id, tier: t.tier || '', status: WORD[t.status] ? t.status : 'queued', agentId: t.agentId || ''};
+      });
+    var TASK = {pending: 'queued', in_progress: 'running', completed: 'done'};
+    return (s.tasks || []).map(function (t) {
+      var m = /^\[(\w+)\]\s*(.*)$/.exec(t.subject || '');
+      return {title: m ? m[2] : (t.subject || t.id), tier: m ? m[1] : '', status: TASK[t.status] || 'queued', agentId: ''};
+    });
+  }
+  _plans(all) {
+    var self = this, n = now();
+    var rows = all.filter(function (x) { var p = x.s.plan; return p && (!p.finished || n - (ts(p.updatedAt) || 0) <= FIN_PLAN_MS); })
+      .sort(function (a, b) { return (a.s.plan.finished ? 1 : 0) - (b.s.plan.finished ? 1 : 0); });
+    if (!rows.length) return null;
+    var p = h('section', 'panel plans'), head = ap(h('div', 'ph'), h('h3', 'lab', 'Plans')), ul = h('ul', 'pl');
+    var hidden = [];
+    rows.forEach(function (x, i) { var li = self._planRow(x); if (i >= MAX_PLANS) { li.hidden = true; hidden.push(li); } ul.appendChild(li); });
+    if (hidden.length) {
+      var more = key('+' + hidden.length + ' more', 'q', function () { hidden.forEach(function (li) { li.hidden = false; }); more.hidden = true; });
+      head.appendChild(more);
+    }
+    return ap(p, head, ul);
+  }
+  _planRow(x) {
+    var self = this, pl = x.s.plan, tasks = this._tasksOf(x.s), li = h('li');
+    var done = typeof pl.done === 'number' ? pl.done : tasks.filter(function (t) { return t.status === 'done'; }).length;
+    var total = typeof pl.total === 'number' ? pl.total : tasks.length;
+    var b = h('button', 'plan' + (pl.finished ? ' fin' : '')); b.type = 'button';
+    ap(b, ap(h('span', 'pt'), h('span', 'pn', pl.title || x.s.name), h('span', 'pc', pl.finished ? 'Done ' + hm(ts(pl.updatedAt)) : done + '/' + total)));
+    var seg = h('span', 'seg'); seg.setAttribute('aria-hidden', 'true');
+    if (tasks.length && tasks.length <= 24) tasks.forEach(function (t) { seg.appendChild(h('i', t.status)); });
+    else { seg.classList.add('bar'); var f = h('i', 'done'); f.style.width = (total ? Math.round(100 * done / total) : 0) + '%'; seg.appendChild(f); }
+    b.appendChild(seg);
+    var meta = [];
+    if (!pl.finished && pl.phase) meta.push(pl.phase);
+    if (pl.source === 'tasks') meta.push('from tasks');
+    if (x.s.name && pl.title && pl.title.indexOf(x.s.name) !== 0) meta.push(x.s.name);
+    var failed = tasks.filter(function (t) { return t.status === 'failed'; }).length;
+    if (meta.length || failed) { var m = h('span', 'pm', meta.join(' · ')); if (failed) m.appendChild(h('span', 'al', (meta.length ? ' · ' : '') + '▲ ' + failed + ' failed')); b.appendChild(m); }
+    b.addEventListener('click', function () { self._goTo(x); });
+    return ap(li, b);
+  }
+
+  // ---------- session panel ----------
+  _sess(x) {
+    var s = x.s, p = h('article', 'panel sess');
+    p.id = 'sess-' + s.id; p.tabIndex = -1;
+    if (!x.online) p.classList.add('cue-al'); else if (s.status === 'waiting') p.classList.add('cue-you');
+    ap(p, ap(h('div', 'sh'), h('h3', 'sn', s.name || s.localName || 'Session'), this._state(x)));
+    if (s.summary) p.appendChild(h('p', 'sum', s.summary));
+    p.appendChild(this._meta(x));
+    if (s.status === 'waiting' && s.waiting) p.appendChild(this._ask(x));
+    ap(p, this._thread(x), this._queue(x), this._actions(x));
+    return p;
+  }
+  _state(x) {
+    var s = x.s;
+    if (!x.online) return h('span', 'st off', 'Offline');
+    if (s.status === 'waiting') return h('span', 'st you', 'Needs you');
+    if (s.status === 'working') return h('span', 'st', 'Working');
+    if (s.status === 'ended') return h('span', 'st', 'Done ' + hm(ts(s.updatedAt)));
+    return h('span', 'st', 'Idle');
+  }
+  _meta(x) {
+    var s = x.s, bits = [];
+    if (this._multi) bits.push(x.mname);
+    if (s.model) bits.push(modelName(s.model));
+    var tt = tokSum(s.tokens); if (tt) bits.push(tok(tt) + ' tok');
+    if (typeof s.costUsd === 'number') bits.push('$' + s.costUsd.toFixed(2));
+    var w = h('div', 'metaw'), row = ap(h('div', 'meta'), h('span', null, bits.join(' · ')));
+    w.appendChild(row);
+    var c = s.ctx;
+    if (c && c.max) {
+      var pct = Math.round(100 * c.used / c.max), warn = pct >= 85;
+      row.appendChild(h('span', warn ? 'warn' : null, (warn ? '▲ ' : '') + pct + '% context'));
+      var bar = h('div', 'ctx' + (warn ? ' warn' : '')), f = h('i'); f.style.width = Math.min(100, pct) + '%';
+      bar.setAttribute('aria-hidden', 'true'); w.appendChild(ap(bar, f));
+    }
+    return w;
+  }
+  _ask(x) {
+    var self = this, s = x.s, w = s.waiting, box = h('div', 'ask'), fb = h('p', 'fb'), rows = [];
+    var isGo = s.id === this._goId, can = this._canAnswer(x);
+    var qs = (w.kind === 'question' && Array.isArray(w.questions)) ? w.questions.filter(function (q) { return q && typeof q.question === 'string'; }) : [];
+    var since = h('span', 'mono');
+    this._tick(function () { var t0 = ts(w.since); since.textContent = t0 ? 'waiting ' + span(now() - t0) : ''; });
+    box.appendChild(ap(h('div', 'at'), h('span', 'lab', qs.length ? (qs[0].header || 'Question') : (w.tool || 'Permission')), since));
+    fb.hidden = true;
+    function done(text) { rows.forEach(function (r) { r.hidden = true; }); say(fb, text); }
+    if (qs.length) {
+      var direct = qs.length === 1 && !qs[0].multiSelect, picks = [];
+      qs.forEach(function (q, qi) {
+        if (qi) box.appendChild(h('span', 'lab', q.header || 'Question'));
+        box.appendChild(h('p', 'aq', q.question));
+        if (!can) return;
+        var keys = h('div', 'keys'), sel = [];
+        picks.push(sel);
+        (q.options || []).map(function (o) { return o && typeof o === 'object' ? o.label : o; }).filter(function (l) { return typeof l === 'string' && l; }).forEach(function (lab) {
+          var b = key(lab, '', function () {
+            if (direct) { done('Answered ' + hm(now()) + ' · ' + lab); return; }
+            var on = sel.indexOf(lab) < 0;
+            if (!q.multiSelect) { sel.length = 0; Array.prototype.forEach.call(keys.children, function (c) { c.classList.remove('on'); c.setAttribute('aria-pressed', 'false'); }); }
+            if (on) sel.push(lab); else sel.splice(sel.indexOf(lab), 1);
+            b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+          });
+          if (!direct) b.setAttribute('aria-pressed', 'false');
+          keys.appendChild(b);
+        });
+        rows.push(keys); box.appendChild(keys);
+      });
+      if (can && !direct) {
+        var ar = ap(h('div', 'keys'), key('Answer', isGo ? 'go' : '', function () {
+          if (picks.some(function (p) { return !p.length; })) { say(fb, 'Pick an answer for each question', 'err'); return; }
+          done('Answered ' + hm(now()));
+        }));
+        rows.push(ar); box.appendChild(ar);
+      }
+    } else {
+      box.appendChild(h('p', 'aq', w.text || 'Waiting for your answer'));
+      if (can) {
+        var note = h('input', 'note'); note.type = 'text'; note.maxLength = 1000; note.placeholder = 'Note for Claude (optional)'; note.hidden = true;
+        note.setAttribute('aria-label', 'Note for Claude');
+        var send = function (word) { return function () { var n = note.value.trim(); note.hidden = true; done(word + ' ' + hm(now()) + (n ? ' · with your note' : '')); }; };
+        var nk = key('Add a note', 'q', function () { note.hidden = false; nk.hidden = true; note.focus(); });
+        var keys = ap(h('div', 'keys'), key('Allow', isGo ? 'go' : '', send('Allowed')), key('Deny', '', send('Denied')), nk);
+        rows.push(keys); ap(box, keys, note);
+      }
+    }
+    if (!can) box.appendChild(h('p', 'mono', 'Answer in claude.ai'));
+    box.appendChild(fb);
+    return box;
+  }
+  _thread(x) {
+    var self = this, s = x.s, n = now();
+    var list = (s.agents || []).filter(function (a) { return a && (a.title || a.steps > 0); });
+    if (!list.length) return null;
+    var run = [], held = [], older = [];
+    list.forEach(function (a) {
+      if (a.status === 'running') run.push(a);
+      else (n - (ts(a.endedAt) || ts(a.startedAt) || 0) <= HELD_MS ? held : older).push(a);
+    });
+    var box = h('div', 'agents'), th = h('div', 'thread');
+    var olderEls = older.sort(byStart).map(function (a) { var e = self._endLine(a); e.hidden = true; return e; });
+    olderEls.forEach(function (e) { th.appendChild(e); });
+    var heldEls = [];
+    run.concat(held).sort(byStart).forEach(function (a) { var e = a.status === 'running' ? self._runAgent(a) : self._endLine(a); if (a.status !== 'running') heldEls.push(e); th.appendChild(e); });
+    box.appendChild(th);
+    if (held.length + older.length) {
+      var foot = h('div', 'tf'), fb = h('p', 'fb'); fb.hidden = true;
+      if (older.length) {
+        var ob = key(older.length + ' finished', 'q'); ob.appendChild(chev());
+        ob.setAttribute('aria-expanded', 'false');
+        ob.addEventListener('click', function () { var open = ob.getAttribute('aria-expanded') !== 'true'; olderEls.forEach(function (e) { e.hidden = !open; }); ob.setAttribute('aria-expanded', String(open)); });
+        foot.appendChild(ob);
+      }
+      foot.appendChild(key('Clear finished', 'q', function () {
+        olderEls.concat(heldEls).forEach(function (e) { e.remove(); });
+        foot.hidden = true; say(fb, 'Cleared ' + hm(now()));
+        if (!run.length) th.hidden = true;
+      }));
+      ap(box, foot, fb);
+    }
+    return box;
+  }
+  _runAgent(a) {
+    var el = h('div', 'ag run'), trail = (a.trail || []).filter(function (t) { return t && t.text; }).slice(-3);
+    el.appendChild(h('span', 'node'));
+    var b = h(trail.length ? 'button' : 'div', 'agb'); if (trail.length) b.type = 'button';
+    var age = h('span', 'age');
+    this._tick(function () { var t0 = ts(a.startedAt); age.textContent = t0 ? span(now() - t0) : ''; });
+    ap(b, ap(h('span', 'agt'), h('span', 'agn', a.title || 'Agent'), age));
+    if (a.current && a.current.text) b.appendChild(h('span', 'now', a.current.text));
+    var m = []; if (a.steps) m.push(a.steps + ' steps');
+    var tt = tokSum(a.tokens); if (tt) m.push(tok(tt) + ' tok');
+    var tr = tierOf(a.type); if (tr) m.push(tr);
+    if (m.length) b.appendChild(h('span', 'agm', m.join(' · ')));
+    el.appendChild(b);
+    if (trail.length) {
+      var ol = h('ol', 'trail'); ol.hidden = true;
+      trail.forEach(function (t) { var at = ts(t.at); ol.appendChild(ap(h('li'), h('span', 'tm', at ? hm(at) : ''), h('span', null, t.text))); });
+      el.appendChild(ol); toggler(b, ol);
+    }
+    return el;
+  }
+  _endLine(a) {
+    var k = a.status === 'failed' ? 'failed' : a.status === 'stopped' ? 'stopped' : 'done';
+    var e = ts(a.endedAt), el = h('div', 'ag ' + k);
+    el.appendChild(h('span', 'node'));
+    el.appendChild(ap(h('p', 'agl'), h('span', 'tw', {failed: 'Failed', stopped: 'Stopped', done: 'Done'}[k] + (e ? ' ' + hm(e) : '')), document.createTextNode(a.title || 'Agent')));
+    return el;
+  }
+  _queue(x) {
+    var tasks = this._tasksOf(x.s); if (!tasks.length) return null;
+    var queued = tasks.filter(function (t) { return t.status === 'queued'; });
+    var box = h('div', 'q'), list = h('ol', 'tasks'), b = h('button', 'next'); b.type = 'button'; list.hidden = true;
+    tasks.forEach(function (t) { list.appendChild(ap(h('li', t.status), h('span', 'tw', WORD[t.status]), ap(h('span', 'tt', t.title), t.tier ? h('span', 'tier', '  ' + t.tier) : null))); });
+    if (queued.length) ap(b, h('span', 'lab', 'Next'), h('span', 'nt', queued[0].title), queued.length > 1 ? h('span', 'mono', '+' + (queued.length - 1)) : null, chev());
+    else ap(b, h('span', 'lab', 'Tasks'), h('span', 'nt'), chev());
+    toggler(b, list);
+    return ap(box, b, list);
+  }
+  _actions(x) {
+    var s = x.s, row = h('div', 'acts'), w = h('div', 'actw'), comp = null, more = this._more(x);
+    if (x.canCmd && (s.controls || []).indexOf('send') >= 0) {
+      comp = this._composer(x);
+      var mb = key('Message', 'q'); toggler(mb, comp, function () { comp.querySelector('textarea').focus(); }); row.appendChild(mb);
+    }
+    var mo = key('More', 'q'); toggler(mo, more); row.appendChild(mo);
+    return ap(w, row, comp, more);
+  }
+  _composer(x) {
+    var s = x.s, c = h('div', 'comp'), fb = h('p', 'fb'); c.hidden = true; fb.hidden = true;
+    var ta = h('textarea'); ta.rows = 2; ta.maxLength = 4000; ta.placeholder = 'Message ' + (s.name || 'this session');
+    ta.setAttribute('aria-label', 'Message to ' + (s.name || 'this session'));
+    var urg = h('label', 'tick'), cb = h('input'); cb.type = 'checkbox'; urg.hidden = true;
+    ap(urg, cb, h('span', null, 'Urgent'), h('span', 'mono', 'stops the current reply'));
+    var send = key('Send', '', function () {
+      if (/^error demo$/.test(s.name)) { say(fb, 'Not sent: the session turned it down', 'err'); return; }
+      say(fb, (cb.checked ? 'Sent urgent ' : 'Sent ') + hm(now()));
+      ta.value = ''; cb.checked = false; send.disabled = true; urg.hidden = true;
+    });
+    send.disabled = true;
+    ta.addEventListener('input', function () { var has = !!ta.value.trim(); send.disabled = !has; urg.hidden = !has; });
+    return ap(c, ta, ap(h('div', 'crow'), urg, h('span', 'sp'), send), fb);
+  }
+  _more(x) {
+    var s = x.s, box = h('div', 'more'), dl = h('dl', 'kv'); box.hidden = true;
+    var add = function (k, v) { if (v == null || v === '') return null; var dd = h('dd', null, v); ap(dl, h('dt', null, k), dd); return dd; };
+    add('Machine', x.mname + (x.online ? '' : ' (offline)'));
+    add('Local name', s.localName); add('Effort', s.effort);
+    var tk = s.tokens;
+    if (tk && typeof tk.cacheHit === 'number') add('Cached', Math.round(tk.cacheHit * 100) + '%');
+    if (tk && tk.turns) add('Turns', String(tk.turns));
+    if (ts(s.startedAt)) add('Started', hm(ts(s.startedAt)));
+    var la = add('Last report', ' ');
+    if (la) this._tick(function () { var u = ts(s.updatedAt); la.textContent = u ? span(now() - u) + ' ago' : ''; });
+    box.appendChild(dl);
+    var bg = ['interrupt', 'stop'].filter(function (a) { return x.canCmd && (s.controls || []).indexOf(a) >= 0; });
+    if (bg.length) {
+      var keys = h('div', 'keys'), fb = h('p', 'fb'); fb.hidden = true;
+      if (bg.indexOf('interrupt') >= 0) { var ib = key('Interrupt'); twoTap(ib, 'Interrupt', 'Tap again to interrupt', fb, null, function () { say(fb, 'Interrupted ' + hm(now())); }); keys.appendChild(ib); }
+      if (bg.indexOf('stop') >= 0) { var sb = key('Stop'); twoTap(sb, 'Stop', 'Tap again to stop', fb, null, function () { say(fb, 'Stop sent ' + hm(now())); }); keys.appendChild(sb); }
+      ap(box, keys, fb);
+    }
+    return box;
+  }
+
+  // ---------- idle ----------
+  _idle(rest) {
+    var self = this, p = h('section', 'panel idle'), fold = h('button', 'fold'), ul = h('ul', 'irows'); fold.type = 'button'; ul.hidden = true;
+    ap(fold, h('span', 'lab', 'Idle'), h('span', 'cnt', String(rest.length)), chev());
+    rest.forEach(function (x) { ul.appendChild(self._idleRow(x)); });
+    toggler(fold, ul);
+    return ap(p, fold, ul);
+  }
+  _idleRow(x) {
+    var s = x.s, li = h('li', 'irow'), b = h('button', 'ib'), im = h('span', 'im'), det = h('div', 'idet'), bits = [];
+    li.id = 'sess-' + s.id; li.tabIndex = -1; b.type = 'button'; det.hidden = true;
+    if (this._idleMulti && x.online) bits.push(x.mname);
+    var u = ts(s.updatedAt);
+    if (s.status === 'ended') bits.push('Done ' + (u ? hm(u) : '')); else if (u) bits.push(span(now() - u) + ' ago');
+    im.textContent = bits.join(' · ');
+    if (!x.online) { im.appendChild(document.createTextNode(bits.length ? ' · ' : '')); im.appendChild(h('span', 'off', x.mname + ' offline')); }
+    ap(b, h('span', 'in', s.name || s.localName || 'Session'), im, s.summary ? h('span', 'is', s.summary) : null);
+    det.appendChild(this._actions(x));
+    b.addEventListener('click', function () { li.classList.toggle('open', det.hidden); });
+    toggler(b, det);
+    var xb = h('button', 'x', '×'), gone = h('div', 'gone'); xb.type = 'button'; xb.setAttribute('aria-label', 'Hide ' + (s.name || 'session')); gone.hidden = true;
+    var undo = key('Undo', 'q', function () { gone.hidden = true; b.hidden = false; xb.hidden = false; });
+    ap(gone, h('span', 'mono', ''), undo);
+    xb.addEventListener('click', function () { gone.firstChild.textContent = 'Hidden ' + hm(now()) + ' · ' + (s.name || ''); gone.hidden = false; b.hidden = true; xb.hidden = true; det.hidden = true; b.setAttribute('aria-expanded', 'false'); li.classList.remove('open'); undo.focus(); });
+    return ap(li, b, xb, gone, det);
+  }
+
+  // ---------- new session ----------
+  _newPanel(machines) {
+    var p = h('section', 'panel newp'), form = h('div', 'form'), fb = h('p', 'fb'); p.hidden = true; fb.hidden = true;
+    var n = 0;
+    var field = function (label, el, wide) { var id = 'nf' + (n++), l = h('label', 'lab', label); el.id = id; l.htmlFor = id; return ap(h('div', 'f' + (wide ? ' wide' : '')), l, el); };
+    var sel = function (opts) { var s = h('select'); opts.forEach(function (o) { var op = h('option', null, o[1]); op.value = o[0]; if (o[2]) op.disabled = true; s.appendChild(op); }); return s; };
+    var cmdM = machines.filter(function (m) { return m.cmd && m.cmd.enabled; });
+    var mSel = sel(machines.map(function (m) { var ok = m.online && m.cmd && m.cmd.enabled; return [m.id, m.name + (m.online ? (ok ? '' : ' (commands off)') : ' (offline)'), !ok]; }));
+    var first = cmdM.filter(function (m) { return m.online; })[0] || {cmd: {folders: [], models: [], permissionModes: []}};
+    var c = first.cmd;
+    var fSel = sel((c.folders || []).map(function (f) { return [f.key, f.label || f.key]; }));
+    var modSel = sel((c.models || []).map(function (m) { return [m, modelName(m)]; }));
+    var pSel = sel((c.permissionModes || []).map(function (m) { return [m, PERM[m] || m]; }));
+    var name = h('input'); name.type = 'text'; name.maxLength = 80; name.placeholder = 'What to call it';
+    var prompt = h('textarea'); prompt.rows = 3; prompt.maxLength = 4000; prompt.placeholder = 'What should Claude do?';
+    var start = key('Start');
+    twoTap(start, 'Start', 'Tap again to start', fb, function () { return name.value.trim() && prompt.value.trim() ? null : 'Name and prompt are needed'; },
+      function () { say(fb, 'Started ' + hm(now()) + ' · ' + name.value.trim()); name.value = ''; prompt.value = ''; });
+    ap(form, field('Machine', mSel), field('Folder', fSel), field('Model', modSel), field('Permissions', pSel),
+      field('Name', name, true), field('Prompt', prompt, true));
+    return ap(p, ap(h('div', 'ph'), h('h3', 'lab', 'New session')), form, ap(h('div', 'crow'), fb, h('span', 'sp'), start));
+  }
+}
+customElements.define('crew-hub-card', CrewHubCard);
+
+// ---------- review harness (outside the card; hidden with ?shot=1) ----------
+var card = document.getElementById('card'), bar = document.getElementById('harness');
+if (Q.get('shot')) bar.hidden = true;
+else {
+  bar.appendChild(h('strong', null, 'Mockup harness (not part of the card)'));
+  var group = function (label, opts, cur, fn) {
+    var g = h('span'); g.appendChild(document.createTextNode(label + ': '));
+    var bs = opts.map(function (o) { var b = h('button', null, o[1]); b.type = 'button'; b.setAttribute('aria-pressed', String(o[0] === cur));
+      b.addEventListener('click', function () { bs.forEach(function (x) { x.setAttribute('aria-pressed', 'false'); }); b.setAttribute('aria-pressed', 'true'); fn(o[0]); }); return b; });
+    bs.forEach(function (b) { g.appendChild(b); }); bar.appendChild(g);
+  };
+  group('Card mode', [['auto', 'Auto'], ['light', 'Day'], ['dark', 'Night']], Q.get('mode') || 'auto', function (m) { card.setMode(m); });
+  group('HA theme', [['', 'Device'], ['light', 'Light'], ['dark', 'Dark']], Q.get('theme') || '', function (t) { card.setTheme(t); });
+  bar.appendChild(h('span', null, 'Clock: 26 Oct 14:30 (fixture)'));
+}
+})();
+</script>
+</body>
+</html>

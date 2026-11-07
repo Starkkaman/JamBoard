@@ -2,7 +2,7 @@
 
 DOMAIN = "crew_hub"
 NAME = "Crew Hub"
-VERSION = "0.5.1"  # keep equal to manifest.json "version"
+VERSION = "0.6.0"  # keep equal to manifest.json "version"
 
 CONF_PREFIX = "prefix"
 CONF_MACHINES = "machines"
@@ -31,6 +31,7 @@ DATA_DISMISSED = f"{DOMAIN}_dismissed"  # dismissed.Dismissed (private Store cre
 
 CARD_FILENAME = "crew-hub-card.js"
 CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
+FONTS_URL = f"/{DOMAIN}/fonts"  # Jost + IBM Plex Mono (OFL), next to the card: the card resolves fonts/ against its own URL
 
 WS_SUBSCRIBE = f"{DOMAIN}/subscribe"
 WS_GET = f"{DOMAIN}/get"

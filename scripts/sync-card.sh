@@ -5,3 +5,6 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cp "$root/card/crew-hub-card.js" "$root/custom_components/crew_hub/www/crew-hub-card.js"
 echo "synced card/crew-hub-card.js -> custom_components/crew_hub/www/crew-hub-card.js"
+mkdir -p "$root/custom_components/crew_hub/www/fonts"
+cp "$root"/card/fonts/* "$root/custom_components/crew_hub/www/fonts/"
+echo "synced card/fonts -> custom_components/crew_hub/www/fonts"

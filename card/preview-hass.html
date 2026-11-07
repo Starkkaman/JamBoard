@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Crew Hub card: hass feed preview</title>
-<style>html,body{margin:0;background:#141210}</style>
+<style>html,body{margin:0}</style>
 <script src="crew-hub-card.js"></script>
 </head>
 <body>
@@ -22,6 +22,7 @@
 // &manual=1 stops the timer; window.__stressTick() then runs one update (card/measure-jumps.js drives it).
 // &scroller=1 puts the card inside a shadow-DOM scroll container (like HA's view), &noanchor=1 turns off the browser's
 // own scroll anchoring (overflow-anchor:none, like Safari) so the card's own compensation is what's measured.
+// ?theme=light|dark sets hass.themes.darkMode like Home Assistant's own day/night (without it the device decides).
 const FIXTURE_NOW = Date.parse("2026-10-26T14:30:00Z");
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 function shift(v, delta) {
@@ -235,9 +236,10 @@ class FakeConnection {
   const raw = await (await fetch("fixtures/snapshot-sample.json")).json();
   const connection = new FakeConnection(shift(raw, Date.now() - FIXTURE_NOW));
   const user = {is_admin: !params.has("refuse")};
+  const themes = params.has("theme") ? {darkMode: params.get("theme") === "dark", theme: "default"} : undefined;
   // HA sets hass on every state change; the card must subscribe only once per connection.
-  card.hass = {connection, user, states: {}};
-  card.hass = {connection, user, states: {}};
+  card.hass = {connection, user, states: {}, themes};
+  card.hass = {connection, user, states: {}, themes};
 })();
 </script>
 </body>

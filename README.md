@@ -190,21 +190,31 @@ tiered workers and reviews their diffs. Rules come from `docs/research/orchestra
   in progress / completed. crew-hubd turns that into `session.plan` with `source: "tasks"`: tiers from the prefix,
   agents joined to their tasks by `#<taskId>`, phase plan → delegate → review → finished, title `<Project>: <n> tasks`.
 
-## The card (integration 0.5.0)
+## The card (integration 0.6.0)
 
-- **Active plans**: one paper strip per unfinished plan on any machine and session (newest first), plus plans that
-  finished in the last 10 minutes (chip "finished", bar full). Each strip shows the title, the bar, the phase,
-  "N of M accepted" and the session and machine; tapping it scrolls to that session (opening it if it is idle). More
-  than 4 plans: 4 strips and a "+N more" toggle. No plans: one "No plan running" strip.
-- **Sessions**: working and waiting sessions get full blocks. Each block lists its task queue under the summary
-  (running tasks and the next 3 queued; done tasks behind an "N done" toggle), its running agents, and its finished
-  agents (done, failed, stopped) behind an "N finished" toggle with **Clear finished**. Stopped agents show a dim
-  "stopped" chip and the stop reason; the session's local name shows in the meta row when it differs from its name.
-- **Tokens** (0.5.0): the session meta row shows e.g. "312k tok · 94% cached", each agent "48k tok" (all four counts
-  summed). A plan derived from the task list looks like a file plan (tiers in the queue, task titles on joined agents)
-  and its strip carries a small dim "from tasks" tag.
-- **Idle sessions (N)**: idle and ended sessions, collapsed by default, one row each (name, machine, last activity,
-  one line of summary). Tap a row to open the full block with its message box; **×** dismisses the session.
+The card uses Callsheet's Jam look (design and mockup: `design/callsheet-harmony/`). Day or night follows Home
+Assistant's own dark mode (`hass.themes.darkMode`); without it, the device setting. Its two fonts (Jost and IBM Plex
+Mono, OFL) are served by the integration at `/crew_hub/fonts/`, so the card makes no outside requests.
+
+- **Header**: "Crew Hub", "Updated N ago" (▲ in warn ink after 90 s), **+ New** (only when a machine can start
+  sessions) and **?** (help). Below it one headline: "2 need you, 3 working."; "2 need you" jumps to the oldest prompt.
+- **Plans**: one row per unfinished plan on any machine and session, plus plans that finished in the last 10 minutes
+  ("Done HH:MM"). Each row shows the title, "6/7", a segmented track (one segment per task: done, running, queued,
+  failed) and the phase, with "from tasks" when the plan comes from the task list. Tapping a row scrolls to its
+  session (opening it if it is idle). More than 4 plans: 4 rows and "+N more". No plans: "No plan running".
+- **Sessions**: one panel per working or waiting session. **Waiting sessions come first (oldest prompt first), then
+  working ones**, each group in first-seen order. A panel shows the name and state ("Needs you" pill, "Working",
+  "Offline"), a two-line summary, a meta line (model, tokens, cost; machine name only with several machines) and the
+  context bar ("▲ 91% context" from 85 %). A prompt shows in an inset box with Allow / Deny / "Add a note" or the
+  question's options; only the oldest answerable prompt gets the one orange key.
+- **Agents**: a thread of running agents (name, elapsed time, current step, "23 steps · 48k tok · careful"; tap for the
+  last 3 steps). Agents that just finished stay in place, dimmed; older ones sit behind "N finished" with
+  **Clear finished**. Stopped agents show "Stopped HH:MM" and the stop reason.
+- **Queue**: one row, "NEXT <first queued task> +N" (or "TASKS"), that opens the full task list with tiers.
+- **Message** opens the message box (Urgent appears once there is text). **More** shows local name, effort, cache %,
+  turns, start time and last report, plus **Interrupt** and **Stop** for background sessions (both two-tap).
+- **Idle N**: idle and ended sessions, folded by default, one row each (name, last activity, one line of summary).
+  Tap a row for Message and More; **×** hides it at once (no undo).
 - **Dismiss is shared**: Clear finished and × call the admin-only websocket command `crew_hub/dismiss`
   `{machine, session, agents?: [ids], session_dismissed?: bool}`. Home Assistant keeps the dismissed ids in the private
   Store `.storage/crew_hub.dismissed` and leaves them out of what every device gets (`crew_hub/subscribe`,
@@ -313,7 +323,8 @@ Differences from macOS/Linux:
 - Card source: `card/crew-hub-card.js`. After editing, run `scripts/sync-card.sh` (copies it into
   `custom_components/crew_hub/www/`; a test fails if the copies differ). Previews: `card/preview.html`,
   `card/preview-hass.html` (fake hass feed + fake command answers). Browser check of the controls:
-  `pw-node card/verify-controls.js` (writes `card/screenshots/card-v050-390.png` and `card-v050-1280.png`).
+  `pw-node card/verify-controls.js`; layout jumps: `pw-node card/measure-jumps.js`. The card's fonts live in
+  `custom_components/crew_hub/www/fonts/` (served) and `card/fonts/` (previews); `sync-card.sh` doesn't copy them.
 - Stdlib tests: `python3 -m unittest discover -s tests` (also on Windows: `python -m unittest discover -s tests`;
   POSIX-only tests are skipped there).
 - Home Assistant tests: `/home/node/.local/opt/ha-test-venv/bin/python -m pytest tests/ha`

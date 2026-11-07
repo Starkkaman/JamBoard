@@ -11,7 +11,7 @@ const path = require("path");
 const {chromium} = require("playwright");
 
 const DIR = __dirname;
-const TYPES = {".html": "text/html", ".js": "text/javascript", ".json": "application/json"};
+const TYPES = {".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".ttf": "font/ttf", ".woff2": "font/woff2"};
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => { const i = argv.indexOf("--" + name); return i >= 0 ? argv[i + 1] : dflt; };
 const CARD = opt("card", null);
@@ -36,12 +36,12 @@ function positions() {
   const vTop = sc ? sc.getBoundingClientRect().top : 0, vH = sc ? sc.clientHeight : innerHeight;
   const put = (k, el) => { const b = el.getBoundingClientRect(); if (b.height) out[k] = {y: b.top - vTop, vis: b.bottom > vTop && b.top < vTop + vH}; };
   for (const a of r.querySelectorAll(".sessions > article.sess")) {
-    const n = a.querySelector(".name");
+    const n = a.querySelector(".sn");
     if (!n) continue;
-    put("sess:" + n.textContent, a.querySelector(".row"));
-    for (const g of a.querySelectorAll(".agent")) put("agent:" + n.textContent + "/" + (g.querySelector(".name") || {}).textContent, g);
+    put("sess:" + n.textContent, a.querySelector(".sh"));
+    for (const g of a.querySelectorAll(".thread.main > .ag")) put("agent:" + n.textContent + "/" + (g.querySelector(".agn") || {}).textContent, g);
   }
-  for (const s of r.querySelectorAll(".plans .strip")) put("plan:" + s.querySelector("h3").textContent, s);
+  for (const s of r.querySelectorAll(".plans .plan:not(.none)")) put("plan:" + s.querySelector(".pn").textContent, s);
   return out;
 }
 
